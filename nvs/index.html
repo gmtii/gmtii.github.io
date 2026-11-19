@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SDR P4 NVS · editor</title>
+<meta name="author" content="@Aitor_EB2AT">
 <!--
   Reads the NVS partition of the ESP32-P4 SDR over USB (Web Serial + esptool-js:
   the chip is reset into its ROM bootloader, the partition table at 0x8000 gives
@@ -41,6 +42,8 @@ body { margin: 0; background: var(--bg); color: var(--text);
 header { padding: 18px 16px 12px; border-bottom: 1px solid var(--border); background: var(--panel); }
 header h1 { margin: 0 0 4px; font-size: 20px; }
 header p { margin: 0; color: var(--text2); font-size: 14px; }
+header p.author { margin: 0 0 6px; color: var(--accent); font-size: 14px; }
+footer { text-align: center; color: var(--text2); font-size: 13px; padding: 8px 16px 24px; }
 main { max-width: 1200px; margin: 0 auto; padding: 16px; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
 button, .filebtn { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
@@ -86,6 +89,7 @@ label.inline { color: var(--text2); font-size: 14px; display: inline-flex; gap: 
 <body>
 <header>
   <h1>SDR P4 · memoria NVS</h1>
+  <p class="author">Autor: <b>@Aitor_EB2AT</b></p>
   <p>Lee la partición NVS de la radio por USB, o de un fichero .bin, muestra todos los ajustes y canales, permite editarlos y genera un .bin nuevo con todos los CRC recalculados.</p>
 </header>
 <main>
@@ -123,6 +127,7 @@ label.inline { color: var(--text2); font-size: 14px; display: inline-flex; gap: 
     </p>
   </div>
 </main>
+<footer>SDR P4 · editor NVS — autor: <b>@Aitor_EB2AT</b></footer>
 
 <script>
 // ==NVS-PARSER-BEGIN==
@@ -604,7 +609,8 @@ function settingsRows() {
         : `<input type="number" data-e="cfg" data-o="${off}" data-l="${len}" data-s="${sg}" value="${raw}"> ${unit || ''}`;
       rows.push({ ns: 'sdr', key: 'cfg', group, label, value: ctl });
     }
-    if (cfg.version !== 1 || cfg.size !== 32) c('Receptor', 'Bloque de ajustes', `<span class="warn">versión ${cfg.version}, ${cfg.size} B: formato desconocido</span>`);
+    if (cfg.version !== 1 || cfg.size !== 32) rows.push({ ns: 'sdr', key: 'cfg', group: 'Receptor', label: 'Bloque de ajustes',
+      value: `<span class="warn">versión ${cfg.version}, ${cfg.size} B: formato desconocido</span>` });
   } else {
     rows.push({ ns: 'sdr', key: 'cfg', group: 'Receptor', label: 'Bloque de ajustes', value: '<span class="muted">sin guardar</span>' });
   }
@@ -757,6 +763,13 @@ function opts(list, sel, extra) {
   return (extra || []).concat(list.map((n, i) => [i, n])).map(([v, n]) => `<option value="${v}"${v === sel ? ' selected' : ''}>${esc(n)}</option>`).join('');
 }
 
+/* App ids as stored in mem/ext (0 = saved by an older firmware, 1..7 = FW.APPS) */
+function appOpts(sel) {
+  const l = [[0, 'antiguo'], ...Object.entries(FW.APPS).map(([id, n]) => [Number(id), n])];
+  if (!l.some(([v]) => v === sel)) l.push([sel, `? (${sel})`]);
+  return l.map(([v, n]) => `<option value="${v}"${v === sel ? ' selected' : ''}>${esc(n)}</option>`).join('');
+}
+
 function renderChannels() {
   const ch = channels();
   const draw = () => {
@@ -767,7 +780,7 @@ function renderChannels() {
         `<select ${d('mode')}>${opts(FW.MODES, c.mode)}</select>`, `<select ${d('step')}>${opts(FW.STEPS, c.step)}</select>`,
         `<select ${d('filter')}>${opts(FW.FILTERS, c.filter, [[-1, '—']])}</select>`,
         `<input class="nm" ${d('name')} maxlength="15" value="${esc(c.name)}">`,
-        `<select ${d('app')}>${opts(Object.values(FW.APPS), c.app - 1, [[0, 'antiguo']]).replace(/value="(\d+)"/g, (m, n, off, str) => m)}</select>`,
+        `<select ${d('app')}>${appOpts(c.app)}</select>`,
         `<input type="number" min="0" max="100" ${d('vol')} value="${c.vol ? c.vol - 1 : ''}" placeholder="—">`,
         `<label class="inline"><input type="checkbox" ${d('skip')}${c.flags & 1 ? ' checked' : ''}> no escanear</label>`];
     });
