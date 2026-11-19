@@ -16,6 +16,12 @@
   Editing: the values are edited in memory and NVS.build() rewrites the whole partition
   (same layout as nvs_partition_gen.py, every CRC recalculated), then re-parses it to verify.
 
+  Writing: the generated image is flashed back over USB to the offset given by the
+  partition table, only if the NVS partition there has the same size. The current
+  contents are read and downloaded as a backup first, and the written range is read
+  back and compared byte by byte before the chip is reset.
+  Not supported: encrypted NVS (flash encryption / nvs_keys).
+
   Keep the decoders in step with the firmware: the band list (bands.c k_bands[]),
   the steps (steps.h), the time zones (tz.c) and the palettes (palettes.c) are
   copied here.
@@ -99,6 +105,7 @@ label.inline { color: var(--text2); font-size: 14px; display: inline-flex; gap: 
     <button id="btnJson" disabled>Exportar JSON</button>
     <button id="btnGen" class="primary" disabled>Generar .bin editado</button>
     <button id="btnBin" disabled>Guardar copia original</button>
+    <button id="btnWrite" disabled>Escribir en la radio (USB)</button>
     <progress id="prog" class="hidden" max="1" value="0"></progress>
     <span id="status">Sin datos.</span>
   </div>
@@ -123,7 +130,10 @@ label.inline { color: var(--text2); font-size: 14px; display: inline-flex; gap: 
     </details>
     <p class="muted" style="margin:8px 0 0;font-size:13px">
       Cierra cualquier monitor serie antes de leer. La radio se reinicia dos veces: entra en el cargador
-      para la lectura y vuelve a arrancar al terminar. Esta página no escribe en la radio: sube el .bin generado con <span class="mono">esptool.py --chip esp32p4 write_flash 0x9000 nvs-edit.bin</span> (usa el offset de tu tabla de particiones).
+      para la lectura o la escritura y vuelve a arrancar al terminar. «Escribir en la radio» descarga antes una copia de
+      seguridad de la NVS actual, escribe la nueva en el offset de la tabla de particiones y la relee para comprobarla.
+      También puedes subir el .bin generado a mano con <span class="mono">esptool.py --chip esp32p4 write_flash 0x9000 nvs-edit.bin</span>
+      (usa el offset de tu tabla de particiones). No sirve con NVS cifrada.
     </p>
   </div>
 </main>
@@ -453,9 +463,16 @@ if (!('serial' in navigator)) { $('btnRead').disabled = true; $('serialNote').cl
 /* ---- reading ------------------------------------------------------------- */
 const term = { clean() {}, writeLine: (t) => log(t), write: (t) => log(t) };
 
-$('btnRead').addEventListener('click', async () => {
+/* Opens the port, enters the ROM bootloader, finds the NVS partition, runs fn, then resets the chip. */
+let busy = false;
+function setBusy(b) {
+  busy = b;
+  $('btnRead').disabled = b || !('serial' in navigator);
+  $('btnWrite').disabled = b || !('serial' in navigator) || !state.parsed;
+}
+async function withRadio(fn) {
   let transport = null, loader = null;
-  $('btnRead').disabled = true;
+  setBusy(true);
   const prog = $('prog');
   try {
     const port = await navigator.serial.requestPort();
@@ -466,12 +483,17 @@ $('btnRead').addEventListener('click', async () => {
     log('Chip: ' + chip);
     setStatus('Leyendo la tabla de particiones…');
     const table = await loader.readFlash(0x8000, 0xC00);
-    const part = NVS.findPartition(table, 1, 2) || { offset: 0x9000, size: 0x6000, label: 'nvs (por defecto)' };
+    let part = NVS.findPartition(table, 1, 2);
+    if (!part) { part = { offset: 0x9000, size: 0x6000, label: 'nvs (por defecto)', guessed: true }; log('Sin tabla de particiones legible: se usa 0x9000, 24 KB'); }
     log(`NVS: ${part.label} en 0x${part.offset.toString(16)}, ${part.size} B`);
-    prog.classList.remove('hidden'); prog.max = part.size; prog.value = 0;
-    setStatus(`Leyendo NVS (${part.size / 1024} KB)…`);
-    const img = await loader.readFlash(part.offset, part.size, (_p, got) => { prog.value = got; });
-    load(new Uint8Array(img), `radio (${chip}), 0x${part.offset.toString(16)}`);
+    const readNvs = async (what) => {
+      prog.classList.remove('hidden'); prog.max = part.size; prog.value = 0;
+      setStatus(`${what} (${part.size / 1024} KB)…`);
+      const img = new Uint8Array(await loader.readFlash(part.offset, part.size, (_p, got) => { prog.value = got; }));
+      prog.classList.add('hidden');
+      return img;
+    };
+    await fn({ loader, chip, part, readNvs, prog });
   } catch (e) {
     console.error(e);
     setStatus('Error: ' + (e && e.message ? e.message : e), true);
@@ -480,8 +502,45 @@ $('btnRead').addEventListener('click', async () => {
     prog.classList.add('hidden');
     try { if (loader) await loader.after('hard_reset'); } catch (e) { log('reset: ' + e); }
     try { if (transport) await transport.disconnect(); } catch (e) { log('disconnect: ' + e); }
-    $('btnRead').disabled = !('serial' in navigator);
+    setBusy(false);
   }
+}
+
+$('btnRead').addEventListener('click', () => withRadio(async ({ chip, part, readNvs }) => {
+  const img = await readNvs('Leyendo NVS');
+  load(img, `radio (${chip}), 0x${part.offset.toString(16)}`);
+}));
+
+$('btnWrite').addEventListener('click', async () => {
+  if (busy) return;
+  let bin;
+  try { bin = generate(); } catch (e) { setStatus('Error: ' + e.message, true); return; }
+  if (!confirm(`Se va a escribir la NVS editada (${bin.length / 1024} KB) en la radio.\n\n` +
+               'Antes se descargará una copia de seguridad de la NVS actual. ¿Continuar?')) return;
+  await withRadio(async ({ loader, chip, part, readNvs, prog }) => {
+    if (part.guessed) throw new Error('No se ha encontrado la partición NVS en la tabla de particiones: no se escribe nada');
+    if (part.size !== bin.length)
+      throw new Error(`La partición NVS de la radio mide ${part.size} B y el .bin ${bin.length} B: no se escribe nada`);
+    const backup = await readNvs('Copia de seguridad de la NVS actual');
+    download(`nvs-backup-${stamp()}.bin`, backup, 'application/octet-stream');
+    log(`Copia de seguridad descargada (${backup.length} B)`);
+    prog.classList.remove('hidden'); prog.max = bin.length; prog.value = 0;
+    setStatus(`Escribiendo NVS en 0x${part.offset.toString(16)}…`);
+    await loader.writeFlash({
+      fileArray: [{ data: bin, address: part.offset }],
+      flashMode: 'keep', flashFreq: 'keep', flashSize: 'keep', eraseAll: false, compress: true,
+      reportProgress: (_i, written) => { prog.value = written; },
+    });
+    log('Escrito; verificando…');
+    const back = await readNvs('Verificando la escritura');
+    let diff = -1;
+    for (let i = 0; i < bin.length; i++) if (back[i] !== bin[i]) { diff = i; break; }
+    if (diff >= 0)
+      throw new Error(`La verificación ha fallado en 0x${(part.offset + diff).toString(16)}. Restaura la copia de seguridad descargada.`);
+    load(back, `radio (${chip}), 0x${part.offset.toString(16)}, tras escribir`);
+    setStatus(`NVS escrita y verificada (${bin.length} B). La radio se reinicia con los nuevos ajustes.`);
+    log('Verificación correcta');
+  });
 });
 
 $('fileIn').addEventListener('change', async (ev) => {
@@ -500,6 +559,7 @@ function load(img, source) {
     const p = state.parsed;
     setStatus(`${p.items.length} entradas de ${source}` + (p.problems.length ? ` · ${p.problems.length} avisos` : ''));
     $('btnJson').disabled = false; $('btnBin').disabled = false; $('btnGen').disabled = false; dirty = 0;
+    $('btnWrite').disabled = busy || !('serial' in navigator);
   } catch (e) {
     setStatus('Error: ' + e.message, true);
   }
@@ -832,16 +892,22 @@ document.addEventListener('click', (e) => {
 });
 
 /* ---- generar .bin ---------------------------------------------------------- */
-$('btnGen').addEventListener('click', () => {
-  try {
+/* Builds the edited partition and checks it parses back to exactly the edited items. */
+function generate() {
     const bin = NVS.build(state.parsed, state.image.length), chk = NVS.parse(bin), same = (a, b) =>
       a.ns === b.ns && a.key === b.key && a.type === b.type && (a.value instanceof Uint8Array ? hex(a.value, 1 << 20) === hex(b.value, 1 << 20) : String(a.value) === String(b.value));
     const bad = chk.problems.length || chk.items.length !== state.parsed.items.length ||
       !state.parsed.items.every((a) => chk.items.some((b) => same(a, b)));
     if (bad) throw new Error('La verificación del .bin generado ha fallado: ' + chk.problems.join('; '));
-    download(`nvs-edit-${stamp()}.bin`, bin, 'application/octet-stream');
-    setStatus(`.bin generado (${bin.length} B): ${chk.items.length} variables, todos los CRC verificados.`);
     log(`Generado: ${chk.pages.filter((g) => g.state !== 0xFFFFFFFF).length} páginas usadas de ${chk.pages.length}`);
+    bin.items = chk.items.length;
+    return bin;
+}
+$('btnGen').addEventListener('click', () => {
+  try {
+    const bin = generate();
+    download(`nvs-edit-${stamp()}.bin`, bin, 'application/octet-stream');
+    setStatus(`.bin generado (${bin.length} B): ${bin.items} variables, todos los CRC verificados.`);
   } catch (e) { setStatus('Error: ' + e.message, true); }
 });
 </script>
