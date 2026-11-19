@@ -1,0 +1,836 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SDR P4 NVS · editor</title>
+<!--
+  Reads the NVS partition of the ESP32-P4 SDR over USB (Web Serial + esptool-js:
+  the chip is reset into its ROM bootloader, the partition table at 0x8000 gives
+  the NVS offset and size, the partition is read, the chip is reset back) or from
+  a .bin file (esptool.py read_flash 0x9000 0x6000 nvs.bin), and lists every
+  entry, decoding the ones the firmware writes (settings.c, memories.c, bands.c,
+  ui.c, tz.c, ft8_app.c, sdr_net.c, sdr_wifi.c).
+
+  Editing: the values are edited in memory and NVS.build() rewrites the whole partition
+  (same layout as nvs_partition_gen.py, every CRC recalculated), then re-parses it to verify.
+
+  Keep the decoders in step with the firmware: the band list (bands.c k_bands[]),
+  the steps (steps.h), the time zones (tz.c) and the palettes (palettes.c) are
+  copied here.
+-->
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --text2: #57606a; --border: #d8dee4;
+  --accent: #0b6bcb; --accent-bg: #e6f0fb; --warn: #b35900; --bad: #c62828; --ok: #1a7f37;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1216; --panel: #171b21; --text: #e6e9ed; --text2: #9aa4ae; --border: #2b323b;
+    --accent: #5aa9ff; --accent-bg: #16263a; --warn: #f0a050; --bad: #ff6b6b; --ok: #5fd27a;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1216; --panel: #171b21; --text: #e6e9ed; --text2: #9aa4ae; --border: #2b323b;
+  --accent: #5aa9ff; --accent-bg: #16263a; --warn: #f0a050; --bad: #ff6b6b; --ok: #5fd27a;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { padding: 18px 16px 12px; border-bottom: 1px solid var(--border); background: var(--panel); }
+header h1 { margin: 0 0 4px; font-size: 20px; }
+header p { margin: 0; color: var(--text2); font-size: 14px; }
+main { max-width: 1200px; margin: 0 auto; padding: 16px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+button, .filebtn { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--panel); color: var(--text); cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button:disabled { opacity: .5; cursor: default; }
+.filebtn input { display: none; }
+#status { color: var(--text2); font-size: 14px; }
+#status.err { color: var(--bad); }
+progress { width: 180px; }
+.card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+.card h2 { margin: 0 0 10px; font-size: 16px; }
+.card h3 { margin: 14px 0 6px; font-size: 14px; color: var(--text2); text-transform: uppercase; letter-spacing: .04em; }
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
+.tabs button { border-radius: 999px; padding: 6px 14px; }
+.tabs button[aria-selected="true"] { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--text2); font-weight: 600; white-space: nowrap; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.mono { font-family: var(--mono); font-size: 13px; }
+.muted { color: var(--text2); }
+.bad { color: var(--bad); }
+.warn { color: var(--warn); }
+.pill { display: inline-block; padding: 0 7px; border-radius: 999px; font-size: 12px; border: 1px solid var(--border); color: var(--text2); }
+.stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.stat { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.stat b { display: block; font-size: 20px; }
+.stat span { color: var(--text2); font-size: 13px; }
+.secret { cursor: pointer; border-bottom: 1px dashed var(--text2); }
+#log { white-space: pre-wrap; font-family: var(--mono); font-size: 12px; color: var(--text2); max-height: 180px; overflow: auto; margin: 0; }
+details summary { cursor: pointer; color: var(--text2); font-size: 14px; }
+.hidden { display: none; }
+input, select, textarea { font: inherit; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); color: var(--text); max-width: 100%; }
+input[type=number] { width: 7em; } input.wide { width: 100%; min-width: 220px; } input.mhz { width: 9em; } input.nm { width: 11em; }
+input.bad { border-color: var(--bad); outline: 1px solid var(--bad); }
+.hint { color: var(--text2); font-size: 12px; } button.sm { padding: 2px 8px; font-size: 13px; }
+.addrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+label.inline { color: var(--text2); font-size: 14px; display: inline-flex; gap: 6px; align-items: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SDR P4 · memoria NVS</h1>
+  <p>Lee la partición NVS de la radio por USB, o de un fichero .bin, muestra todos los ajustes y canales, permite editarlos y genera un .bin nuevo con todos los CRC recalculados.</p>
+</header>
+<main>
+  <div class="actions">
+    <button class="primary" id="btnRead">Leer de la radio (USB)</button>
+    <label class="filebtn">Abrir .bin<input type="file" id="fileIn" accept=".bin,application/octet-stream"></label>
+    <button id="btnJson" disabled>Exportar JSON</button>
+    <button id="btnGen" class="primary" disabled>Generar .bin editado</button>
+    <button id="btnBin" disabled>Guardar copia original</button>
+    <progress id="prog" class="hidden" max="1" value="0"></progress>
+    <span id="status">Sin datos.</span>
+  </div>
+  <div id="serialNote" class="card hidden">
+    <b>Este navegador no tiene Web Serial.</b> Usa Chrome o Edge en un ordenador, o lee el .bin con
+    <span class="mono">esptool.py --chip esp32p4 read_flash 0x9000 0x6000 nvs.bin</span> y ábrelo aquí.
+  </div>
+
+  <div id="out" class="hidden">
+    <nav class="tabs" role="tablist" id="tabs"></nav>
+    <section id="tab-resumen"></section>
+    <section id="tab-ajustes" class="hidden"></section>
+    <section id="tab-canales" class="hidden"></section>
+    <section id="tab-bandas" class="hidden"></section>
+    <section id="tab-nvs" class="hidden"></section>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary>Registro de la conexión</summary>
+      <pre id="log"></pre>
+    </details>
+    <p class="muted" style="margin:8px 0 0;font-size:13px">
+      Cierra cualquier monitor serie antes de leer. La radio se reinicia dos veces: entra en el cargador
+      para la lectura y vuelve a arrancar al terminar. Esta página no escribe en la radio: sube el .bin generado con <span class="mono">esptool.py --chip esp32p4 write_flash 0x9000 nvs-edit.bin</span> (usa el offset de tu tabla de particiones).
+    </p>
+  </div>
+</main>
+
+<script>
+// ==NVS-PARSER-BEGIN==
+/* ESP-IDF NVS v2 parser. Page = 4096 B: 32 B header, 32 B entry-state bitmap
+ * (2 bits per entry: 3 empty, 2 written, 0 erased), 126 entries of 32 B.
+ * Entry: ns u8, type u8, span u8, chunk u8, crc32 u32, key[16], data[8].
+ * Var-length items (string, blob chunk) carry size u16, rsv u16, data crc32
+ * in data[] and their payload in the next span-1 entries. */
+const NVS = (() => {
+  const PAGE = 4096, ENTRIES = 126;
+  const PAGE_STATE = { 0xFFFFFFFF: 'vacía', 0xFFFFFFFE: 'activa', 0xFFFFFFFC: 'llena', 0xFFFFFFF8: 'liberándose', 0: 'corrupta' };
+  const TYPES = { 0x01: 'u8', 0x11: 'i8', 0x02: 'u16', 0x12: 'i16', 0x04: 'u32', 0x14: 'i32', 0x08: 'u64', 0x18: 'i64',
+                  0x21: 'str', 0x41: 'blob', 0x42: 'blob_data', 0x48: 'blob_idx' };
+
+  const CRC_TABLE = (() => {
+    const t = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+      t[n] = c >>> 0;
+    }
+    return t;
+  })();
+  /* zlib.crc32(data, value), as nvs_partition_gen.py calls it with 0xFFFFFFFF */
+  function crc32(bytes, value = 0) {
+    let c = (value ^ 0xFFFFFFFF) >>> 0;
+    for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+  function cstr(bytes) {
+    let n = bytes.indexOf(0);
+    if (n < 0) n = bytes.length;
+    return new TextDecoder().decode(bytes.subarray(0, n));
+  }
+
+  function parse(buf) {
+    const pages = [], raw = [];
+    for (let p = 0; p + PAGE <= buf.length; p += PAGE) {
+      const dv = new DataView(buf.buffer, buf.byteOffset + p, PAGE);
+      const state = dv.getUint32(0, true), seq = dv.getUint32(4, true), version = buf[p + 8];
+      const hdrCrcOk = dv.getUint32(28, true) === crc32(buf.subarray(p + 4, p + 28), 0xFFFFFFFF);
+      const pg = { index: p / PAGE, state, stateName: PAGE_STATE[state] || ('0x' + state.toString(16)), seq, version,
+                   hdrCrcOk, written: 0, erased: 0, empty: 0 };
+      pages.push(pg);
+      if (state === 0xFFFFFFFF || PAGE_STATE[state] === undefined || state === 0) continue;
+      for (let i = 0; i < ENTRIES;) {
+        const st = (buf[p + 32 + (i >> 2)] >> ((i & 3) * 2)) & 3;
+        if (st !== 2) { if (st === 3) pg.empty++; else pg.erased++; i++; continue; }
+        const off = p + 64 + i * 32;
+        let span = buf[off + 2];
+        if (span < 1 || i + span > ENTRIES) span = 1;
+        const e = { page: pg.index, seq, slot: i, ns: buf[off], type: buf[off + 1], span, chunk: buf[off + 3],
+                    key: cstr(buf.subarray(off + 8, off + 24)), data: buf.slice(off + 24, off + 32) };
+        const hdr = new Uint8Array(28);
+        hdr.set(buf.subarray(off, off + 4), 0); hdr.set(buf.subarray(off + 8, off + 32), 4);
+        e.crcOk = new DataView(buf.buffer, buf.byteOffset + off + 4, 4).getUint32(0, true) === crc32(hdr, 0xFFFFFFFF);
+        if (e.type === 0x21 || e.type === 0x42 || e.type === 0x41) {
+          const ddv = new DataView(e.data.buffer);
+          const size = ddv.getUint16(0, true);
+          e.payload = buf.slice(off + 32, off + 32 + Math.min(size, (span - 1) * 32));
+          e.dataCrcOk = e.payload.length === size && ddv.getUint32(4, true) === crc32(e.payload, 0xFFFFFFFF);
+        }
+        raw.push(e);
+        pg.written += span;
+        i += span;
+      }
+    }
+    /* namespaces: ns 0, u8, key = name, data[0] = index */
+    const nsName = {};
+    for (const e of raw) if (e.ns === 0 && e.type === 0x01) nsName[e.data[0]] = e.key;
+    /* newest copy wins: order by page sequence, then slot */
+    raw.sort((a, b) => (a.seq - b.seq) || (a.page - b.page) || (a.slot - b.slot));
+    const last = new Map();
+    for (const e of raw) {
+      if (e.ns === 0) continue;
+      const cls = e.type === 0x42 ? 'chunk' + e.chunk : (e.type === 0x48 ? 'idx' : 'val');
+      last.set(e.ns + '\u0000' + e.key + '\u0000' + cls, e);
+    }
+    const items = [], problems = [];
+    for (const e of last.values()) {
+      if (e.type === 0x42) continue; /* joined below, through their index */
+      const it = { ns: nsName[e.ns] ?? ('#' + e.ns), key: e.key, type: TYPES[e.type] || ('0x' + e.type.toString(16)),
+                   page: e.page, slot: e.slot, crcOk: e.crcOk };
+      const dv = new DataView(e.data.buffer);
+      switch (e.type) {
+        case 0x01: it.value = dv.getUint8(0); break;
+        case 0x11: it.value = dv.getInt8(0); break;
+        case 0x02: it.value = dv.getUint16(0, true); break;
+        case 0x12: it.value = dv.getInt16(0, true); break;
+        case 0x04: it.value = dv.getUint32(0, true); break;
+        case 0x14: it.value = dv.getInt32(0, true); break;
+        case 0x08: it.value = dv.getBigUint64(0, true); break;
+        case 0x18: it.value = dv.getBigInt64(0, true); break;
+        case 0x21: it.value = cstr(e.payload); it.crcOk = it.crcOk && e.dataCrcOk; break;
+        case 0x41: it.type = 'blob'; it.value = e.payload; it.crcOk = it.crcOk && e.dataCrcOk; break;
+        case 0x48: {
+          const size = dv.getUint32(0, true), count = dv.getUint8(4), start = dv.getUint8(5);
+          const parts = [];
+          let ok = true;
+          for (let c = start; c < start + count; c++) {
+            const ch = last.get(e.ns + '\u0000' + e.key + '\u0000chunk' + c);
+            if (!ch) { ok = false; break; }
+            parts.push(ch.payload);
+            ok = ok && ch.crcOk && ch.dataCrcOk;
+          }
+          const out = new Uint8Array(parts.reduce((s, x) => s + x.length, 0));
+          let o = 0;
+          for (const x of parts) { out.set(x, o); o += x.length; }
+          it.type = 'blob';
+          it.value = out;
+          it.chunks = count;
+          it.crcOk = it.crcOk && ok && out.length === size;
+          if (out.length !== size) problems.push(`${it.ns}/${it.key}: blob de ${out.length} B, el índice dice ${size} B`);
+          break;
+        }
+        default: it.value = e.data;
+      }
+      if (!it.crcOk) problems.push(`${it.ns}/${it.key}: CRC incorrecto`);
+      items.push(it);
+    }
+    items.sort((a, b) => a.ns.localeCompare(b.ns) || a.key.localeCompare(b.key));
+    return { pages, items, namespaces: Object.values(nsName), problems, nsName };
+  }
+
+  /* partition table at 0x8000: 32 B entries, magic 0x50AA, type, subtype, offset, size, label */
+  function findPartition(table, type, subtype) {
+    for (let o = 0; o + 32 <= table.length; o += 32) {
+      const dv = new DataView(table.buffer, table.byteOffset + o, 32);
+      if (dv.getUint16(0, true) !== 0x50AA) break;
+      if (table[o + 2] === type && table[o + 3] === subtype)
+        return { offset: dv.getUint32(4, true), size: dv.getUint32(8, true), label: cstr(table.subarray(o + 12, o + 28)) };
+    }
+    return null;
+  }
+
+
+  /* Rewrites the whole partition from parsed.items (nvs_partition_gen layout, version 2 blobs). */
+  const RANGE = { u8: [0n, 255n], i8: [-128n, 127n], u16: [0n, 65535n], i16: [-32768n, 32767n], u32: [0n, 4294967295n],
+                  i32: [-2147483648n, 2147483647n], u64: [0n, (1n << 64n) - 1n], i64: [-(1n << 63n), (1n << 63n) - 1n] };
+  const ENC = { u8: 0x01, i8: 0x11, u16: 0x02, i16: 0x12, u32: 0x04, i32: 0x14, u64: 0x08, i64: 0x18, str: 0x21 };
+  function build(parsed, size) {
+    const out = new Uint8Array(size).fill(0xFF), PAGES = size / PAGE, enc = new TextEncoder();
+    const nsMap = { ...parsed.nsName };
+    for (const it of parsed.items) {
+      if (it.ns.startsWith('#')) nsMap[Number(it.ns.slice(1))] = it.ns;
+      else if (!Object.values(nsMap).includes(it.ns)) {
+        let n = 1; while (nsMap[n] !== undefined) n++;
+        if (n > 254) throw new Error('Demasiados espacios de nombres');
+        nsMap[n] = it.ns;
+      }
+    }
+    const idxOf = (name) => Number(Object.keys(nsMap).find((k) => nsMap[k] === name));
+    let p = -1, slot = 0;
+    const newPage = () => {
+      if (p >= 0) out.set([0xFC, 0xFF, 0xFF, 0xFF], p * PAGE);          /* previous page: full */
+      p++;
+      if (p > PAGES - 2) throw new Error('No caben los datos: NVS necesita al menos una página libre');
+      const b = p * PAGE, dv = new DataView(out.buffer, b, 32);
+      dv.setUint32(0, 0xFFFFFFFE, true); dv.setUint32(4, p, true); out[b + 8] = 0xFE;
+      dv.setUint32(28, crc32(out.subarray(b + 4, b + 28), 0xFFFFFFFF), true);
+      slot = 0;
+    };
+    newPage();
+    const emit = (ns, type, span, chunk, key, data8, payload) => {
+      if (slot + span > ENTRIES) newPage();
+      const b = p * PAGE, o = b + 64 + slot * 32, kb = enc.encode(key);
+      if (kb.length > 15) throw new Error(`Clave "${key}" de más de 15 bytes`);
+      out.fill(0, o + 8, o + 24);
+      out[o] = ns; out[o + 1] = type; out[o + 2] = span; out[o + 3] = chunk;
+      out.set(kb, o + 8); out.set(data8, o + 24);
+      if (payload) out.set(payload, o + 32);
+      const h = new Uint8Array(28); h.set(out.subarray(o, o + 4), 0); h.set(out.subarray(o + 8, o + 32), 4);
+      new DataView(out.buffer, o + 4, 4).setUint32(0, crc32(h, 0xFFFFFFFF), true);
+      for (let k = 0; k < span; k++) { const i = slot + k; out[b + 32 + (i >> 2)] &= ~(1 << ((i & 3) * 2)); }
+      slot += span;
+    };
+    const d8 = () => new Uint8Array(8).fill(0xFF);
+    const varData = (len, payload) => { const d = d8(), dv = new DataView(d.buffer); dv.setUint16(0, len, true); dv.setUint32(4, crc32(payload, 0xFFFFFFFF), true); return d; };
+    const nsIds = Object.keys(nsMap).map(Number).sort((a, b) => a - b);
+    for (const id of nsIds) {
+      const name = nsMap[id], d = d8(); d[0] = id;
+      emit(0, 0x01, 1, 0xFF, name, d);
+      for (const it of parsed.items.filter((x) => x.ns === name)) {
+        const t = it.type;
+        if (RANGE[t]) {
+          const d = d8(), dv = new DataView(d.buffer), v = BigInt(it.value);
+          switch (t) {
+            case 'u8': dv.setUint8(0, Number(v)); break; case 'i8': dv.setInt8(0, Number(v)); break;
+            case 'u16': dv.setUint16(0, Number(v), true); break; case 'i16': dv.setInt16(0, Number(v), true); break;
+            case 'u32': dv.setUint32(0, Number(v), true); break; case 'i32': dv.setInt32(0, Number(v), true); break;
+            case 'u64': dv.setBigUint64(0, v, true); break; case 'i64': dv.setBigInt64(0, v, true); break;
+          }
+          emit(id, ENC[t], 1, 0xFF, it.key, d);
+        } else if (t === 'str') {
+          const pl = new Uint8Array([...enc.encode(it.value), 0]);
+          if (pl.length > 4000) throw new Error(`${it.ns}/${it.key}: cadena demasiado larga`);
+          emit(id, 0x21, 1 + Math.ceil(pl.length / 32), 0xFF, it.key, varData(pl.length, pl), pl);
+        } else if (t === 'blob') {
+          const v = it.value; if (!v.length) throw new Error(`${it.ns}/${it.key}: blob vacío`);
+          let off = 0, chunks = 0;
+          while (off < v.length) {
+            if (ENTRIES - slot < 2) newPage();
+            let max = (ENTRIES - slot - 1) * 32;
+            if (v.length - off > max && v.length - off <= 4000) { newPage(); max = (ENTRIES - 1) * 32; }
+            const take = Math.min(v.length - off, max), pl = v.subarray(off, off + take);
+            emit(id, 0x42, 1 + Math.ceil(take / 32), chunks, it.key, varData(take, pl), pl);
+            off += take; chunks++;
+          }
+          const d = d8(), dv = new DataView(d.buffer); dv.setUint32(0, v.length, true); d[4] = chunks; d[5] = 0;
+          emit(id, 0x48, 1, 0xFF, it.key, d);
+        } else throw new Error(`${it.ns}/${it.key}: tipo ${t} no soportado al regenerar`);
+      }
+    }
+    return out;
+  }
+  return { parse, build, crc32, findPartition, TYPES, RANGE };
+})();
+
+/* ---- what the firmware stores (keep in step with main/ and components/) ---- */
+const FW = (() => {
+  const MODES = ['USB', 'LSB', 'AM', 'SAM', 'SAM-L', 'SAM-U', 'NFM', 'WFM'];
+  const STEPS = ['100 Hz', '1 kHz', '5 kHz', '10 kHz', '100 kHz', '1 MHz', '8.33 kHz', '9 kHz', '12.5 kHz', '25 kHz', '6.25 kHz', '10 Hz'];
+  const FILTERS = ['CW (100-500)', '1.8k', '2.3k', '2.7k', 'VAR'];
+  const IF_MODES = ['Offset', 'Zero-IF', 'Low-IF'];
+  const DC = ['Off', 'Auto', 'On'];
+  const NR = ['Off', 'Espectral', 'LMS', 'Notch'];
+  const AGC = ['OFF', 'CST', 'LNG', 'SLW', 'MED', 'FST'];
+  const SOURCES = ['RTL-SDR', 'Hermes-Lite 2', 'MiriSDR', 'Pluto (red)', 'Pluto (USB)'];
+  const APPS = { 1: 'Receptor', 2: 'FT8', 3: 'DMR', 4: 'AIS', 5: 'TETRA', 6: 'ADS-B', 7: 'SCAN' };
+  const MAP_BASE = ['Vectorial', 'OSM', 'OSM noche'];
+  const PALETTES = ['Classic', 'Fire', 'Viridis', 'Grayscale', 'Turbo', 'Inferno', 'Magma', 'Plasma', 'GQRX',
+                    'Electric', 'Classic Green', 'Smoke', 'Temper Colors', 'Vivid', 'WebSDR'];
+  const TZ = ['UTC', 'WET/WEST', 'CET/CEST', 'EET/EEST', 'MSK', 'IST', 'CST+8', 'JST', 'AEST/AEDT', 'NZST/NZDT',
+              'BRT-3', 'EST/EDT', 'CST/CDT', 'MST/MDT', 'PST/PDT', 'HST'];
+  const BANDS = ['160 m', '80 m', '60 m', '40 m', '30 m', '20 m', '17 m', '15 m', '12 m', '10 m', '6 m', '4 m', '2 m',
+                 '70 cm', '23 cm', 'LW', 'MW', '120 m BC', '90 m BC', '75 m BC', '60 m BC', '49 m BC', '41 m BC',
+                 '31 m BC', '25 m BC', '22 m BC', '19 m BC', '16 m BC', '15 m BC', '13 m BC', '11 m BC', 'FM BC',
+                 'CB', 'AIR', 'MARINE', 'PMR'];
+  const MEM_COUNT = 128, MEM_SLOT = 24, MEM_PER_PAGE = 16;
+  const INT32_MIN = -2147483648n;
+  return { MODES, STEPS, FILTERS, IF_MODES, DC, NR, AGC, SOURCES, APPS, MAP_BASE, PALETTES, TZ, BANDS,
+           MEM_COUNT, MEM_SLOT, MEM_PER_PAGE, INT32_MIN };
+})();
+
+function pick(arr, i) { return arr[i] !== undefined ? arr[i] : `? (${i})`; }
+function fmtHz(v) {
+  const n = BigInt(v);
+  const neg = n < 0n, a = neg ? -n : n;
+  const mhz = a / 1000000n, khz = (a / 1000n) % 1000n, hz = a % 1000n;
+  return `${neg ? '-' : ''}${mhz}.${String(khz).padStart(3, '0')}.${String(hz).padStart(3, '0')} MHz`;
+}
+function onOff(v) { return Number(v) ? 'Sí' : 'No'; }
+function ipStr(b, o) { return `${b[o]}.${b[o + 1]}.${b[o + 2]}.${b[o + 3]}`; }
+
+/* settings.c settings_blob_t (version 1, 32 B) */
+function decodeCfg(b) {
+  if (b.length < 32) return null;
+  const dv = new DataView(b.buffer, b.byteOffset, b.length);
+  return {
+    version: dv.getUint16(0, true), size: dv.getUint16(2, true),
+    if_mode: b[4], dc_mode: b[5], rf_gain_db: b[6], tuner_agc: b[7],
+    volume: b[8], agc_mode: b[9], agc_max_gain_db: b[10], nr_mode: b[11],
+    brightness: b[12], spec_speed: b[13], spec_agc: b[14], spec_smooth: b[15],
+    spec_ref_db: dv.getInt16(16, true), spec_range_db: dv.getInt16(18, true),
+    flt_var_lo: dv.getUint16(20, true), flt_var_hi: dv.getUint16(22, true),
+    remember_vfo: b[24], demod: b[25], step_idx: b[26], filter_idx: b[27], freq: dv.getUint32(28, true),
+  };
+}
+
+/* memories.c: slots (mem_slot_t x 128), ext (app, vol), hzhi (bits 32..39 of the Hz) */
+function decodeChannels(slots, ext, hzhi) {
+  const out = [];
+  if (!slots) return out;
+  const n = Math.min(FW.MEM_COUNT, Math.floor(slots.length / FW.MEM_SLOT));
+  for (let i = 0; i < n; i++) {
+    const o = i * FW.MEM_SLOT;
+    const dv = new DataView(slots.buffer, slots.byteOffset + o, FW.MEM_SLOT);
+    const hz = BigInt(dv.getUint32(0, true)) | (BigInt(hzhi && i < hzhi.length ? hzhi[i] : 0) << 32n);
+    const app = ext && 2 * i + 1 < ext.length ? ext[2 * i] : 0;
+    const vol = ext && 2 * i + 1 < ext.length ? ext[2 * i + 1] : 0;
+    out.push({
+      index: i, page: Math.floor(i / FW.MEM_PER_PAGE) + 1, pos: (i % FW.MEM_PER_PAGE) + 1,
+      hz, used: hz !== 0n, mode: slots[o + 4], step: slots[o + 5], filter: dv.getInt8(6), flags: slots[o + 7],
+      name: new TextDecoder().decode(slots.subarray(o + 8, o + 24)).replace(/\0.*$/s, ''),
+      app, vol,
+    });
+  }
+  return out;
+}
+
+/* bands.c bs_slot_t: hz u32, mode, step, rsv[2] */
+function decodeBandStack(b) {
+  const out = [];
+  if (!b) return out;
+  for (let i = 0; i * 8 + 8 <= b.length; i++) {
+    const dv = new DataView(b.buffer, b.byteOffset + i * 8, 8);
+    out.push({ band: FW.BANDS[i] ?? `banda ${i}`, hz: dv.getUint32(0, true), mode: b[i * 8 + 4], step: b[i * 8 + 5] });
+  }
+  return out;
+}
+// ==NVS-PARSER-END==
+</script>
+
+<script type="module">
+import { ESPLoader, Transport } from 'https://cdn.jsdelivr.net/npm/esptool-js@0.7.0/bundle.js';
+
+const $ = (id) => document.getElementById(id);
+const state = { image: null, parsed: null, source: '' };
+
+function setStatus(t, err = false) { $('status').textContent = t; $('status').className = err ? 'err' : ''; }
+function log(t) { $('log').textContent += t + '\n'; $('log').scrollTop = $('log').scrollHeight; }
+function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+function hex(b, max = 64) {
+  const s = Array.from(b.subarray(0, max), (x) => x.toString(16).padStart(2, '0')).join(' ');
+  return b.length > max ? s + ` … (${b.length} B)` : s;
+}
+function secret(v) {
+  return v ? `<span class="secret" data-secret="${esc(v)}" title="Pulsa para mostrar">••••••••</span>` : '<span class="muted">(vacío)</span>';
+}
+
+if (!('serial' in navigator)) { $('btnRead').disabled = true; $('serialNote').classList.remove('hidden'); }
+
+/* ---- reading ------------------------------------------------------------- */
+const term = { clean() {}, writeLine: (t) => log(t), write: (t) => log(t) };
+
+$('btnRead').addEventListener('click', async () => {
+  let transport = null, loader = null;
+  $('btnRead').disabled = true;
+  const prog = $('prog');
+  try {
+    const port = await navigator.serial.requestPort();
+    transport = new Transport(port, false);
+    loader = new ESPLoader({ transport, baudrate: 921600, terminal: term });
+    setStatus('Conectando con el cargador del chip…');
+    const chip = await loader.main();
+    log('Chip: ' + chip);
+    setStatus('Leyendo la tabla de particiones…');
+    const table = await loader.readFlash(0x8000, 0xC00);
+    const part = NVS.findPartition(table, 1, 2) || { offset: 0x9000, size: 0x6000, label: 'nvs (por defecto)' };
+    log(`NVS: ${part.label} en 0x${part.offset.toString(16)}, ${part.size} B`);
+    prog.classList.remove('hidden'); prog.max = part.size; prog.value = 0;
+    setStatus(`Leyendo NVS (${part.size / 1024} KB)…`);
+    const img = await loader.readFlash(part.offset, part.size, (_p, got) => { prog.value = got; });
+    load(new Uint8Array(img), `radio (${chip}), 0x${part.offset.toString(16)}`);
+  } catch (e) {
+    console.error(e);
+    setStatus('Error: ' + (e && e.message ? e.message : e), true);
+    log('ERROR ' + (e && e.stack ? e.stack : e));
+  } finally {
+    prog.classList.add('hidden');
+    try { if (loader) await loader.after('hard_reset'); } catch (e) { log('reset: ' + e); }
+    try { if (transport) await transport.disconnect(); } catch (e) { log('disconnect: ' + e); }
+    $('btnRead').disabled = !('serial' in navigator);
+  }
+});
+
+$('fileIn').addEventListener('change', async (ev) => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  load(new Uint8Array(await f.arrayBuffer()), f.name);
+  ev.target.value = '';
+});
+
+function load(img, source) {
+  try {
+    if (img.length < 4096 || img.length % 4096) throw new Error(`tamaño ${img.length} B: no es una partición NVS (múltiplo de 4096)`);
+    state.image = img; state.source = source;
+    state.parsed = NVS.parse(img);
+    render();
+    const p = state.parsed;
+    setStatus(`${p.items.length} entradas de ${source}` + (p.problems.length ? ` · ${p.problems.length} avisos` : ''));
+    $('btnJson').disabled = false; $('btnBin').disabled = false; $('btnGen').disabled = false; dirty = 0;
+  } catch (e) {
+    setStatus('Error: ' + e.message, true);
+  }
+}
+
+/* ---- export -------------------------------------------------------------- */
+function download(name, data, type) {
+  const url = URL.createObjectURL(new Blob([data], { type }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: name });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function stamp() { return new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-'); }
+$('btnBin').addEventListener('click', () => download(`nvs-${stamp()}.bin`, state.image, 'application/octet-stream'));
+$('btnJson').addEventListener('click', () => {
+  const p = state.parsed;
+  const v = (x) => typeof x === 'bigint' ? x.toString() : (x instanceof Uint8Array ? hex(x, 1 << 20) : x);
+  const it = byKey();
+  const doc = {
+    source: state.source, read: new Date().toISOString(),
+    items: p.items.map((i) => ({ ns: i.ns, key: i.key, type: i.type, value: v(i.value), crcOk: i.crcOk })),
+    channels: channels().filter((c) => c.used).map((c) => ({ ...c, hz: c.hz.toString() })),
+    bandStack: decodeBandStack(it('bands', 'stack')),
+  };
+  download(`nvs-${stamp()}.json`, JSON.stringify(doc, null, 2), 'application/json');
+});
+
+/* ---- rendering ----------------------------------------------------------- */
+function byKey() {
+  const m = new Map(state.parsed.items.map((i) => [i.ns + '/' + i.key, i.value]));
+  return (ns, key) => m.get(ns + '/' + key);
+}
+function channels() {
+  const it = byKey();
+  return decodeChannels(it('mem', 'slots'), it('mem', 'ext'), it('mem', 'hzhi'));
+}
+
+const TABS = [['resumen', 'Resumen'], ['ajustes', 'Ajustes'], ['canales', 'Canales'], ['bandas', 'Pila de bandas'], ['nvs', 'Todas las entradas']];
+function showTab(id) {
+  for (const [t] of TABS) {
+    $('tab-' + t).classList.toggle('hidden', t !== id);
+    $('tabs').querySelector(`[data-tab="${t}"]`).setAttribute('aria-selected', String(t === id));
+  }
+}
+$('tabs').innerHTML = TABS.map(([id, n]) => `<button role="tab" data-tab="${id}">${n}</button>`).join('');
+$('tabs').addEventListener('click', (e) => { const t = e.target.dataset.tab; if (t) showTab(t); });
+document.addEventListener('click', (e) => {
+  const s = e.target.closest('.secret');
+  if (s) { s.textContent = s.dataset.secret; s.classList.remove('secret'); }
+});
+
+function table(head, rows, numCols = []) {
+  return `<div class="scroll"><table><thead><tr>${head.map((h, i) => `<th class="${numCols.includes(i) ? 'num' : ''}">${h}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map((r) => `<tr>${r.map((c, i) => `<td class="${numCols.includes(i) ? 'num' : ''}">${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+
+function render() {
+  $('out').classList.remove('hidden');
+  renderSummary(); renderSettings(); renderChannels(); renderBands(); renderRaw();
+  showTab('resumen');
+}
+
+function renderSummary() {
+  const p = state.parsed, ch = channels();
+  const used = p.pages.reduce((s, g) => s + g.written, 0), total = p.pages.length * 126;
+  $('tab-resumen').innerHTML = `
+    <div class="card"><h2>Origen</h2><p class="mono" style="margin:0">${esc(state.source)}</p></div>
+    <div class="card"><h2>Contenido</h2><div class="stats">
+      <div class="stat"><b>${p.items.length}</b><span>variables</span></div>
+      <div class="stat"><b>${p.namespaces.length}</b><span>espacios: ${esc(p.namespaces.join(', '))}</span></div>
+      <div class="stat"><b>${ch.filter((c) => c.used).length}</b><span>canales de ${FW.MEM_COUNT}</span></div>
+      <div class="stat"><b>${Math.round(100 * used / total)} %</b><span>ocupado (${used} de ${total} entradas)</span></div>
+    </div></div>
+    ${p.problems.length ? `<div class="card"><h2 class="warn">Avisos</h2><ul>${p.problems.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+    <div class="card"><h2>Páginas</h2>${table(['Página', 'Estado', 'Secuencia', 'Versión', 'Escritas', 'Borradas', 'Libres', 'CRC cabecera'],
+      p.pages.map((g) => [g.index, g.stateName, g.state === 0xFFFFFFFF ? '' : g.seq, g.state === 0xFFFFFFFF ? '' : '0x' + g.version.toString(16),
+        g.written, g.erased, g.empty, g.state === 0xFFFFFFFF ? '' : (g.hdrCrcOk ? 'bien' : '<span class="bad">mal</span>')]), [0, 2, 4, 5, 6])}</div>`;
+}
+
+/* Every key the firmware writes: [ns, key, group, label, formatter]. */
+function settingsRows() {
+  const it = byKey(), rows = [], seen = new Set();
+  const add = (ns, key, group, label, fmt) => {
+    const v = it(ns, key);
+    seen.add(ns + '/' + key);
+    let val = '<span class="muted">sin guardar (valor por defecto)</span>';
+    if (v !== undefined) {
+      const f = fmt(v), skip = typeof v === 'string' || EN[ns + '/' + key] || /pass|aiskey/.test(key);
+      val = edHtml(ns, key, v) + (skip || f === String(v) ? '' : `<div class="hint">${f}</div>`);
+    }
+    rows.push({ ns, key, group, label, value: val });
+  };
+  const cfg = it('sdr', 'cfg') ? decodeCfg(it('sdr', 'cfg')) : null;
+  const cfgBlob = () => it('sdr', 'cfg'), dvc = (o, sg) => { const d = new DataView(cfgBlob().buffer, cfgBlob().byteOffset); return sg ? d.getInt16(o, true) : d.getUint16(o, true); };
+  seen.add('sdr/cfg');
+  if (cfg) {
+    const hi = it('sdr', 'freq_hi') ?? 0;
+    seen.add('sdr/freq_hi');
+    const vfo = BigInt(cfg.freq) | (BigInt(hi) << 32n);
+    rows.push({ ns: 'sdr', key: 'cfg', group: 'Receptor', label: 'VFO guardado',
+      value: `<input class="mhz" data-e="vfo" value="${Number(vfo) / 1e6}"> MHz` });
+    const NY = ['No', 'Sí'];
+    for (const [group, label, off, len, sg, list, unit] of CF) {
+      const raw = len === 2 ? (sg ? dvc(off, true) : dvc(off, false)) : cfgBlob()[off];
+      const ctl = list
+        ? `<select data-e="cfg" data-o="${off}" data-l="${len}" data-s="${sg}">${(raw >= list.length ? [...list, `? (${raw})`] : list).map((n, i) => `<option value="${i}"${i === raw ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select>`
+        : `<input type="number" data-e="cfg" data-o="${off}" data-l="${len}" data-s="${sg}" value="${raw}"> ${unit || ''}`;
+      rows.push({ ns: 'sdr', key: 'cfg', group, label, value: ctl });
+    }
+    if (cfg.version !== 1 || cfg.size !== 32) c('Receptor', 'Bloque de ajustes', `<span class="warn">versión ${cfg.version}, ${cfg.size} B: formato desconocido</span>`);
+  } else {
+    rows.push({ ns: 'sdr', key: 'cfg', group: 'Receptor', label: 'Bloque de ajustes', value: '<span class="muted">sin guardar</span>' });
+  }
+  const hz = (v) => fmtHz(v);
+  add('sdr', 'src', 'Radio', 'Fuente I/Q al arrancar', (v) => pick(FW.SOURCES, v));
+  FW.SOURCES.forEach((s, i) => {
+    add('sdr', 'ppm' + i, 'Radio', `Corrección ${s}`, (v) => (v / 10).toFixed(1) + ' ppm');
+    add('sdr', 'rxo' + i, 'Radio', `Conversor RX ${s}`, hz);
+  });
+  add('sdr', 'plip', 'Radio', 'IP de la Pluto', (v) => esc(v));
+  add('sdr', 'plcs8', 'Radio', 'Pluto en 8 bits (CS8)', onOff);
+  add('sdr', 'sql', 'Audio', 'Squelch NFM', (v) => v ? v + ' dB' : 'apagado');
+  add('sdr', 'sqla', 'Audio', 'Squelch AM', (v) => v ? v + ' dB' : 'apagado');
+  add('sdr', 'mute', 'Audio', 'Silencio', onOff);
+  add('sdr', 'split', 'TX', 'SPLIT', onOff);
+  add('sdr', 'splitf', 'TX', 'Frecuencia SPLIT', hz);
+  add('sdr', 'txofs', 'TX', 'Conversor TX', hz);
+  add('sdr', 'qo100', 'TX', 'Enlace QO-100', onOff);
+  add('sdr', 'ptttog', 'TX', 'Botón PTT', (v) => v ? 'Pulsar y soltar (toggle)' : 'Mantener pulsado');
+  add('sdr', 'ant', 'TX', 'Conmutadores de antena', (v) => `0b${Number(v).toString(2).padStart(4, '0')}`);
+  add('sdr', 'dmrid', 'DMR', 'Mi ID', (v) => v ? String(v) : 'sin poner');
+  add('sdr', 'dmrdst', 'DMR', 'Destino (TG / ID)', String);
+  add('sdr', 'dmropt', 'DMR', 'Tipo de llamada / CC', (v) => `${Number(v) & 0x100 ? 'Privada' : 'Grupo'}, CC ${Number(v) & 15}`);
+  add('sdr', 'dmrrpt', 'DMR', 'Modo / timeslot / ajuste', (v) => {
+    const n = BigInt(v);
+    return `${n & 1n ? 'Repetidor' : 'Simplex'}, TS${(n >> 1n) & 1n ? 2 : 1}, ${(Number((n >> 16n) & 0xFFFFn) - 32768) / 1000} ms`;
+  });
+  add('sdr', 'dmrrptf', 'DMR', 'Salida del repetidor', (v) => v ? hz(v) : 'sin poner');
+  add('sdr', 'dmrshift', 'DMR', 'Desplazamiento del repetidor', hz);
+  add('sdr', 'dmrcal1', 'DMR', 'Calibración enlace 1', (v) => BigInt(v) === FW.INT32_MIN ? 'sin medir' : v + ' µs');
+  add('sdr', 'dmrcal2', 'DMR', 'Calibración enlace 2', (v) => BigInt(v) === FW.INT32_MIN ? 'sin medir' : v + ' µs');
+  add('sdr', 'call', 'Estación', 'Indicativo', (v) => esc(v) || '<span class="muted">(vacío)</span>');
+  add('ft8', 'grid', 'Estación', 'Locator', (v) => esc(v));
+  add('sdr', 'tz', 'Estación', 'Zona horaria', (v) => pick(FW.TZ, v));
+  add('sdr', 'aiskey', 'Estación', 'Clave aisstream.io', secret);
+  add('sdr', 'mapbase', 'Pantalla', 'Mapa base', (v) => pick(FW.MAP_BASE, v));
+  add('ui', 'palette', 'Pantalla', 'Paleta de la cascada', (v) => pick(FW.PALETTES, v));
+  add('ui', 'zoom', 'Pantalla', 'Zoom', (v) => '×' + v);
+  add('ui', 'peak', 'Pantalla', 'Retención de picos', onOff);
+  add('ui', 'dblbl', 'Pantalla', 'Etiquetas dB', onOff);
+  add('ui', 'spec_n', 'Pantalla', 'Espectro (banda estrecha)', onOff);
+  add('ui', 'spec_w', 'Pantalla', 'Espectro (WFM)', onOff);
+  add('ui', 'wf_n', 'Pantalla', 'Cascada (banda estrecha)', onOff);
+  add('ui', 'wf_w', 'Pantalla', 'Cascada (WFM)', onOff);
+  add('sdr', 'scrto', 'Energía', 'Apagado de pantalla', (v) => v ? v + ' s' : 'nunca');
+  add('sdr', 'sdlog', 'Energía', 'Registro en microSD', onOff);
+  add('wifi', 'on', 'Red', 'Wi-Fi', onOff);
+  add('wifi', 'ssid', 'Red', 'SSID', (v) => esc(v));
+  add('wifi', 'pass', 'Red', 'Contraseña Wi-Fi', secret);
+  add('sdr_net', 'ipcfg', 'Red', 'Ethernet', (b) => b.length >= 16
+    ? (b[1] ? `IP fija ${ipStr(b, 4)} / ${ipStr(b, 8)}, puerta ${ipStr(b, 12)}` : `DHCP (fija guardada: ${ipStr(b, 4)})`)
+    : hex(b));
+  for (const k of ['mem/slots', 'mem/ext', 'mem/hzhi', 'bands/stack']) seen.add(k);
+  /* anything else in NVS */
+  for (const i of state.parsed.items) {
+    if (seen.has(i.ns + '/' + i.key)) continue;
+    rows.push({ ns: i.ns, key: i.key, group: 'Otros', label: 'Desconocida para esta página',
+                value: i.value instanceof Uint8Array ? `<span class="mono">${hex(i.value)}</span>` : esc(String(i.value)) });
+  }
+  return rows;
+}
+
+function renderSettings() {
+  const rows = settingsRows(), groups = [...new Set(rows.map((r) => r.group))];
+  $('tab-ajustes').innerHTML = groups.map((g) => `<div class="card"><h2>${g}</h2>${table(['Ajuste', 'Valor', 'Clave NVS'],
+    rows.filter((r) => r.group === g).map((r) => [r.label, r.value, `<span class="mono muted">${esc(r.ns)}/${esc(r.key)}</span>`]))}</div>`).join('');
+}
+
+/* ---- edición ------------------------------------------------------------- */
+const CF = [ /* group, label, offset, bytes, signed, list, unit  (settings_blob_t) */
+  ['Receptor', 'Modo', 25, 1, 0, FW.MODES], ['Receptor', 'Paso', 26, 1, 0, FW.STEPS], ['Receptor', 'Filtro', 27, 1, 0, FW.FILTERS],
+  ['Receptor', 'Filtro variable, inferior', 20, 2, 0, null, 'Hz'], ['Receptor', 'Filtro variable, superior', 22, 2, 0, null, 'Hz'],
+  ['Receptor', 'Recordar VFO al arrancar', 24, 1, 0, ['No', 'Sí']],
+  ['RF', 'Modo de FI', 4, 1, 0, FW.IF_MODES], ['RF', 'Bloqueo de DC', 5, 1, 0, FW.DC], ['RF', 'Ganancia RF', 6, 1, 0, null, 'dB'],
+  ['RF', 'AGC del sintonizador', 7, 1, 0, ['No', 'Sí']],
+  ['Audio', 'Volumen', 8, 1, 0, null, '%'], ['Audio', 'AGC', 9, 1, 0, FW.AGC], ['Audio', 'Ganancia máxima del AGC', 10, 1, 0, null, 'dB'],
+  ['Audio', 'Reducción de ruido', 11, 1, 0, FW.NR],
+  ['Pantalla', 'Brillo', 12, 1, 0, null, '%'], ['Pantalla', 'Velocidad del espectro', 13, 1, 0, null, '%'],
+  ['Pantalla', 'Escala automática del espectro', 14, 1, 0, ['No', 'Sí']], ['Pantalla', 'Suavizado (pasadas)', 15, 1, 0, null],
+  ['Pantalla', 'Referencia del espectro', 16, 2, 1, null, 'dB'], ['Pantalla', 'Rango del espectro', 18, 2, 1, null, 'dB'],
+];
+const EN = { 'sdr/src': FW.SOURCES, 'sdr/tz': FW.TZ, 'sdr/mapbase': FW.MAP_BASE, 'ui/palette': FW.PALETTES };
+const R = NVS.RANGE;
+const find = (k) => state.parsed.items.find((i) => i.ns + '/' + i.key === k);
+function edHtml(ns, key, v, noEnum) {
+  const k = ns + '/' + key, d = `data-e="item" data-k="${esc(k)}"`;
+  if (EN[k] && !noEnum) return `<select ${d}>${(v >= EN[k].length ? [...EN[k], `? (${v})`] : EN[k]).map((n, i) => `<option value="${i}"${i === Number(v) ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select>`;
+  if (v instanceof Uint8Array) return v.length > 64 ? `<span class="mono muted">${v.length} B (se edita en Canales / Pila de bandas)</span>` : `<input ${d} class="mono wide" value="${hex(v, 64)}">`;
+  return `<input ${d} class="${typeof v === 'string' ? 'wide' : ''}" type="${/pass|aiskey/.test(key) ? 'password' : 'text'}" value="${esc(v)}">`;
+}
+function parseVal(type, s) {
+  if (type === 'str') { if (new TextEncoder().encode(s).length > 3999) throw new Error('Cadena demasiado larga'); return s; }
+  if (type === 'blob') {
+    const h = s.replace(/[^0-9a-f]/gi, '');
+    if (!h.length || h.length % 2 || /[^0-9a-f\s]/i.test(s)) throw new Error('Hex inválido');
+    return Uint8Array.from(h.match(/../g), (x) => parseInt(x, 16));
+  }
+  if (!R[type]) throw new Error('Tipo no editable: ' + type);
+  if (!/^-?\d+$/.test(s.trim())) throw new Error('Debe ser un entero');
+  const n = BigInt(s.trim());
+  if (n < R[type][0] || n > R[type][1]) throw new Error(`Fuera de rango (${R[type][0]} a ${R[type][1]})`);
+  return type.endsWith('64') ? n : Number(n);
+}
+function blobOf(ns, key, len) {
+  let it = find(ns + '/' + key);
+  if (!it) { it = { ns, key, type: 'blob', value: new Uint8Array(len), crcOk: true, page: 0, slot: 0 }; state.parsed.items.push(it); }
+  if (it.value.length < len) { const n = new Uint8Array(len); n.set(it.value); it.value = n; }
+  return it.value;
+}
+const toHz = (mhz) => { const n = Math.round(parseFloat(String(mhz).replace(',', '.')) * 1e6); if (!(n >= 0)) throw new Error('Frecuencia inválida'); return n; };
+function setCh(i, f, v) {
+  const sl = blobOf('mem', 'slots', FW.MEM_COUNT * FW.MEM_SLOT), ext = blobOf('mem', 'ext', FW.MEM_COUNT * 2), hi = blobOf('mem', 'hzhi', FW.MEM_COUNT);
+  const o = i * FW.MEM_SLOT, dv = new DataView(sl.buffer, sl.byteOffset);
+  if (f === 'hz') { const hz = BigInt(toHz(v)); if (hz >> 32n > 255n) throw new Error('Frecuencia demasiado alta'); dv.setUint32(o, Number(hz & 0xFFFFFFFFn), true); hi[i] = Number(hz >> 32n); }
+  else if (f === 'mode') sl[o + 4] = +v; else if (f === 'step') sl[o + 5] = +v; else if (f === 'filter') dv.setInt8(o + 6, +v);
+  else if (f === 'skip') sl[o + 7] = (sl[o + 7] & ~1) | (v ? 1 : 0);
+  else if (f === 'name') { sl.fill(0, o + 8, o + 24); sl.set(new TextEncoder().encode(v).subarray(0, 15), o + 8); }
+  else if (f === 'app') ext[2 * i] = +v;
+  else if (f === 'vol') { if (v === '') ext[2 * i + 1] = 0; else { const n = Math.round(+v); if (!(n >= 0 && n <= 100)) throw new Error('Volumen 0-100'); ext[2 * i + 1] = n + 1; } }
+}
+function setBs(i, f, v) {
+  const b = blobOf('bands', 'stack', FW.BANDS.length * 8), dv = new DataView(b.buffer, b.byteOffset);
+  if (f === 'hz') dv.setUint32(i * 8, toHz(v), true); else if (f === 'mode') b[i * 8 + 4] = +v; else b[i * 8 + 5] = +v;
+}
+function apply(t) {
+  const k = t.dataset.e, v = t.value;
+  if (k === 'item') { const it = find(t.dataset.k); it.value = parseVal(it.type, v); }
+  else if (k === 'cfg') {
+    const o = +t.dataset.o, l = +t.dataset.l, sg = +t.dataset.s, n = Number(v), b = blobOf('sdr', 'cfg', 32), dv = new DataView(b.buffer, b.byteOffset);
+    const lo = sg ? -32768 : 0, hi = l === 2 ? (sg ? 32767 : 65535) : 255;
+    if (!Number.isInteger(n) || n < lo || n > hi) throw new Error(`Valor entre ${lo} y ${hi}`);
+    if (l === 1) b[o] = n; else if (sg) dv.setInt16(o, n, true); else dv.setUint16(o, n, true);
+  } else if (k === 'vfo') {
+    const hz = BigInt(toHz(v)), b = blobOf('sdr', 'cfg', 32), hiIt = find('sdr/freq_hi');
+    if (hz >> 32n > 255n) throw new Error('Frecuencia demasiado alta');
+    new DataView(b.buffer, b.byteOffset).setUint32(28, Number(hz & 0xFFFFFFFFn), true);
+    if (hiIt) hiIt.value = Number(hz >> 32n);
+    else if (hz >> 32n) state.parsed.items.push({ ns: 'sdr', key: 'freq_hi', type: 'u8', value: Number(hz >> 32n), crcOk: true, page: 0, slot: 0 });
+  } else if (k === 'ch') setCh(+t.dataset.i, t.dataset.f, t.type === 'checkbox' ? t.checked : v);
+  else if (k === 'bs') setBs(+t.dataset.i, t.dataset.f, v);
+}
+let dirty = 0;
+document.addEventListener('change', (e) => {
+  const t = e.target;
+  if (!t.dataset || !t.dataset.e) return;
+  try { apply(t); t.classList.remove('bad'); dirty++; setStatus(`${dirty} cambio${dirty === 1 ? '' : 's'} sin generar. Pulsa «Generar .bin editado».`); }
+  catch (x) { t.classList.add('bad'); setStatus(x.message, true); }
+});
+function opts(list, sel, extra) {
+  return (extra || []).concat(list.map((n, i) => [i, n])).map(([v, n]) => `<option value="${v}"${v === sel ? ' selected' : ''}>${esc(n)}</option>`).join('');
+}
+
+function renderChannels() {
+  const ch = channels();
+  const draw = () => {
+    const all = $('chAll') && $('chAll').checked;
+    const rows = ch.filter((c) => all || c.used).map((c) => {
+      const d = (f) => `data-e="ch" data-i="${c.index}" data-f="${f}"`;
+      return [`${c.page}-${c.pos}`, `<input class="mhz" ${d('hz')} value="${c.used ? Number(c.hz) / 1e6 : ''}" placeholder="MHz">`,
+        `<select ${d('mode')}>${opts(FW.MODES, c.mode)}</select>`, `<select ${d('step')}>${opts(FW.STEPS, c.step)}</select>`,
+        `<select ${d('filter')}>${opts(FW.FILTERS, c.filter, [[-1, '—']])}</select>`,
+        `<input class="nm" ${d('name')} maxlength="15" value="${esc(c.name)}">`,
+        `<select ${d('app')}>${opts(Object.values(FW.APPS), c.app - 1, [[0, 'antiguo']]).replace(/value="(\d+)"/g, (m, n, off, str) => m)}</select>`,
+        `<input type="number" min="0" max="100" ${d('vol')} value="${c.vol ? c.vol - 1 : ''}" placeholder="—">`,
+        `<label class="inline"><input type="checkbox" ${d('skip')}${c.flags & 1 ? ' checked' : ''}> no escanear</label>`];
+    });
+    $('chTable').innerHTML = rows.length ? table(['Pág-pos', 'Frecuencia', 'Modo', 'Paso', 'Filtro', 'Nombre', 'App', 'Vol %', ''], rows)
+      : '<p class="muted">No hay canales guardados.</p>';
+  };
+  $('tab-canales').innerHTML = `<div class="card"><h2>Canales de memoria</h2>
+    <p><label class="inline"><input type="checkbox" id="chAll"> Mostrar también las posiciones vacías (para crear un canal, ponle frecuencia)</label></p>
+    <div id="chTable"></div>
+    <p class="muted" style="font-size:13px">8 páginas de 16 posiciones (memories.c). Frecuencia 0 = posición vacía. "App" es la aplicación activa al guardar el canal.</p></div>`;
+  $('chAll').addEventListener('change', draw);
+  draw();
+}
+
+function renderBands() {
+  const bs = decodeBandStack(byKey()('bands', 'stack'));
+  $('tab-bandas').innerHTML = `<div class="card"><h2>Última frecuencia de cada banda</h2>${bs.length
+    ? table(['Banda', 'Frecuencia', 'Modo', 'Paso'], bs.map((b, i) => { const d = (f) => `data-e="bs" data-i="${i}" data-f="${f}"`;
+      return [b.band, `<input class="mhz" ${d('hz')} value="${b.hz / 1e6}"> MHz`, `<select ${d('mode')}>${opts(FW.MODES, b.mode)}</select>`, `<select ${d('step')}>${opts(FW.STEPS, b.step)}</select>`]; }))
+    : '<p class="muted">Sin pila de bandas guardada.</p>'}</div>`;
+}
+
+function renderRaw() {
+  const rows = state.parsed.items.map((i, n) => [esc(i.ns), `<span class="mono">${esc(i.key)}</span>`,
+    i.type + (i.chunks ? ` (${i.chunks} ${i.chunks === 1 ? 'trozo' : 'trozos'})` : ''),
+    i.value instanceof Uint8Array ? i.value.length + ' B' : '', edHtml(i.ns, i.key, i.value, true),
+    i.crcOk ? '' : '<span class="bad" title="se recalcula al generar">CRC</span>', `<button class="sm" data-del="${n}">Borrar</button>`]);
+  $('tab-nvs').innerHTML = `<div class="card"><h2>Todas las entradas</h2>
+    ${table(['Espacio', 'Clave', 'Tipo', 'Tamaño', 'Valor (editable)', '', ''], rows, [3])}</div>
+    <div class="card"><h2>Añadir variable</h2><div class="addrow">
+      <input id="nNs" class="nm" placeholder="espacio" maxlength="15"><input id="nKey" class="nm" placeholder="clave" maxlength="15">
+      <select id="nType">${Object.keys(R).concat(['str', 'blob']).map((t) => `<option>${t}</option>`).join('')}</select>
+      <input id="nVal" class="wide" style="width:260px" placeholder="valor (blob: bytes en hex)"><button id="nAdd">Añadir</button></div></div>`;
+}
+function refresh() { renderSettings(); renderChannels(); renderBands(); renderRaw(); }
+document.addEventListener('click', (e) => {
+  const del = e.target.closest('[data-del]');
+  if (del) { const [it] = state.parsed.items.splice(+del.dataset.del, 1); dirty++; refresh(); showTab('nvs'); setStatus(`Borrada ${it.ns}/${it.key}. Se aplicará al generar el .bin.`); }
+  if (e.target.id === 'nAdd') {
+    try {
+      const ns = $('nNs').value.trim(), key = $('nKey').value.trim(), type = $('nType').value;
+      if (!ns || !key) throw new Error('Falta espacio o clave');
+      if (find(ns + '/' + key)) throw new Error('Ya existe esa variable');
+      state.parsed.items.push({ ns, key, type, value: parseVal(type, $('nVal').value), crcOk: true, page: 0, slot: 0 });
+      state.parsed.items.sort((a, b) => a.ns.localeCompare(b.ns) || a.key.localeCompare(b.key));
+      dirty++; refresh(); showTab('nvs'); setStatus(`Añadida ${ns}/${key}.`);
+    } catch (x) { setStatus(x.message, true); }
+  }
+});
+
+/* ---- generar .bin ---------------------------------------------------------- */
+$('btnGen').addEventListener('click', () => {
+  try {
+    const bin = NVS.build(state.parsed, state.image.length), chk = NVS.parse(bin), same = (a, b) =>
+      a.ns === b.ns && a.key === b.key && a.type === b.type && (a.value instanceof Uint8Array ? hex(a.value, 1 << 20) === hex(b.value, 1 << 20) : String(a.value) === String(b.value));
+    const bad = chk.problems.length || chk.items.length !== state.parsed.items.length ||
+      !state.parsed.items.every((a) => chk.items.some((b) => same(a, b)));
+    if (bad) throw new Error('La verificación del .bin generado ha fallado: ' + chk.problems.join('; '));
+    download(`nvs-edit-${stamp()}.bin`, bin, 'application/octet-stream');
+    setStatus(`.bin generado (${bin.length} B): ${chk.items.length} variables, todos los CRC verificados.`);
+    log(`Generado: ${chk.pages.filter((g) => g.state !== 0xFFFFFFFF).length} páginas usadas de ${chk.pages.length}`);
+  } catch (e) { setStatus('Error: ' + e.message, true); }
+});
+</script>
+</body>
+</html>
