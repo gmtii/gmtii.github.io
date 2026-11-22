@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SDR P4 NVS · editor</title>
-<meta name="author" content="@Aitor_EB2AT">
 <!--
   Reads the NVS partition of the ESP32-P4 SDR over USB (Web Serial + esptool-js:
   the chip is reset into its ROM bootloader, the partition table at 0x8000 gives
@@ -15,12 +14,6 @@
 
   Editing: the values are edited in memory and NVS.build() rewrites the whole partition
   (same layout as nvs_partition_gen.py, every CRC recalculated), then re-parses it to verify.
-
-  Writing: the generated image is flashed back over USB to the offset given by the
-  partition table, only if the NVS partition there has the same size. The current
-  contents are read and downloaded as a backup first, and the written range is read
-  back and compared byte by byte before the chip is reset.
-  Not supported: encrypted NVS (flash encryption / nvs_keys).
 
   Keep the decoders in step with the firmware: the band list (bands.c k_bands[]),
   the steps (steps.h), the time zones (tz.c) and the palettes (palettes.c) are
@@ -48,13 +41,13 @@ body { margin: 0; background: var(--bg); color: var(--text);
 header { padding: 18px 16px 12px; border-bottom: 1px solid var(--border); background: var(--panel); }
 header h1 { margin: 0 0 4px; font-size: 20px; }
 header p { margin: 0; color: var(--text2); font-size: 14px; }
-header p.author { margin: 0 0 6px; color: var(--accent); font-size: 14px; }
-footer { text-align: center; color: var(--text2); font-size: 13px; padding: 8px 16px 24px; }
 main { max-width: 1200px; margin: 0 auto; padding: 16px; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
 button, .filebtn { font: inherit; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--border);
   background: var(--panel); color: var(--text); cursor: pointer; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.btn-lime, .filebtn.btn-lime { background: #b5e61d; border-color: #98c400; color: #000; }
+button.btn-green, .filebtn.btn-green { background: #22b14c; border-color: #1a8f3c; color: #fff; }
 button:disabled { opacity: .5; cursor: default; }
 .filebtn input { display: none; }
 #status { color: var(--text2); font-size: 14px; }
@@ -95,17 +88,22 @@ label.inline { color: var(--text2); font-size: 14px; display: inline-flex; gap: 
 <body>
 <header>
   <h1>SDR P4 · memoria NVS</h1>
-  <p class="author">Autor: <b>@Aitor_EB2AT</b></p>
   <p>Lee la partición NVS de la radio por USB, o de un fichero .bin, muestra todos los ajustes y canales, permite editarlos y genera un .bin nuevo con todos los CRC recalculados.</p>
 </header>
 <main>
   <div class="actions">
     <button class="primary" id="btnRead">Leer de la radio (USB)</button>
-    <label class="filebtn">Abrir .bin<input type="file" id="fileIn" accept=".bin,application/octet-stream"></label>
-    <button id="btnJson" disabled>Exportar JSON</button>
-    <button id="btnGen" class="primary" disabled>Generar .bin editado</button>
-    <button id="btnBin" disabled>Guardar copia original</button>
-    <button id="btnWrite" disabled>Escribir en la radio (USB)</button>
+    <label class="filebtn btn-lime">Abrir .bin<input type="file" id="fileIn" accept=".bin,application/octet-stream"></label>
+    <button id="btnJson" class="btn-lime" disabled>Exportar JSON</button>
+    <button id="chExp" class="btn-green" disabled>Exportar memorias CSV (CHIRP)</button>
+  </div>
+  <div class="actions">
+    <button id="btnBin" class="btn-lime" disabled>Guardar copia original</button>
+    <label class="filebtn btn-green" id="chImpL" style="opacity:.5">Importar memorias CSV (CHIRP)<input type="file" id="chImp" accept=".csv,text/csv,text/plain" disabled></label>
+    <button id="btnGen" class="btn-lime" disabled>Generar .bin editado</button>
+    <button id="btnWrite" class="primary" disabled>Grabar en la radio (USB)</button>
+  </div>
+  <div class="actions">
     <progress id="prog" class="hidden" max="1" value="0"></progress>
     <span id="status">Sin datos.</span>
   </div>
@@ -130,14 +128,10 @@ label.inline { color: var(--text2); font-size: 14px; display: inline-flex; gap: 
     </details>
     <p class="muted" style="margin:8px 0 0;font-size:13px">
       Cierra cualquier monitor serie antes de leer. La radio se reinicia dos veces: entra en el cargador
-      para la lectura o la escritura y vuelve a arrancar al terminar. «Escribir en la radio» descarga antes una copia de
-      seguridad de la NVS actual, escribe la nueva en el offset de la tabla de particiones y la relee para comprobarla.
-      También puedes subir el .bin generado a mano con <span class="mono">esptool.py --chip esp32p4 write_flash 0x9000 nvs-edit.bin</span>
-      (usa el offset de tu tabla de particiones). No sirve con NVS cifrada.
+      para la lectura y vuelve a arrancar al terminar. Para grabar usa «Grabar en la radio (USB)» (propone antes una copia de seguridad), o sube el .bin generado con <span class="mono">esptool.py --chip esp32p4 write_flash 0x9000 nvs-edit.bin</span> (usa el offset de tu tabla de particiones).
     </p>
   </div>
 </main>
-<footer>SDR P4 · editor NVS — autor: <b>@Aitor_EB2AT</b></footer>
 
 <script>
 // ==NVS-PARSER-BEGIN==
@@ -463,16 +457,9 @@ if (!('serial' in navigator)) { $('btnRead').disabled = true; $('serialNote').cl
 /* ---- reading ------------------------------------------------------------- */
 const term = { clean() {}, writeLine: (t) => log(t), write: (t) => log(t) };
 
-/* Opens the port, enters the ROM bootloader, finds the NVS partition, runs fn, then resets the chip. */
-let busy = false;
-function setBusy(b) {
-  busy = b;
-  $('btnRead').disabled = b || !('serial' in navigator);
-  $('btnWrite').disabled = b || !('serial' in navigator) || !state.parsed;
-}
-async function withRadio(fn) {
+$('btnRead').addEventListener('click', async () => {
   let transport = null, loader = null;
-  setBusy(true);
+  $('btnRead').disabled = true;
   const prog = $('prog');
   try {
     const port = await navigator.serial.requestPort();
@@ -483,17 +470,12 @@ async function withRadio(fn) {
     log('Chip: ' + chip);
     setStatus('Leyendo la tabla de particiones…');
     const table = await loader.readFlash(0x8000, 0xC00);
-    let part = NVS.findPartition(table, 1, 2);
-    if (!part) { part = { offset: 0x9000, size: 0x6000, label: 'nvs (por defecto)', guessed: true }; log('Sin tabla de particiones legible: se usa 0x9000, 24 KB'); }
+    const part = NVS.findPartition(table, 1, 2) || { offset: 0x9000, size: 0x6000, label: 'nvs (por defecto)' };
     log(`NVS: ${part.label} en 0x${part.offset.toString(16)}, ${part.size} B`);
-    const readNvs = async (what) => {
-      prog.classList.remove('hidden'); prog.max = part.size; prog.value = 0;
-      setStatus(`${what} (${part.size / 1024} KB)…`);
-      const img = new Uint8Array(await loader.readFlash(part.offset, part.size, (_p, got) => { prog.value = got; }));
-      prog.classList.add('hidden');
-      return img;
-    };
-    await fn({ loader, chip, part, readNvs, prog });
+    prog.classList.remove('hidden'); prog.max = part.size; prog.value = 0;
+    setStatus(`Leyendo NVS (${part.size / 1024} KB)…`);
+    const img = await loader.readFlash(part.offset, part.size, (_p, got) => { prog.value = got; });
+    load(new Uint8Array(img), `radio (${chip}), 0x${part.offset.toString(16)}`);
   } catch (e) {
     console.error(e);
     setStatus('Error: ' + (e && e.message ? e.message : e), true);
@@ -502,45 +484,8 @@ async function withRadio(fn) {
     prog.classList.add('hidden');
     try { if (loader) await loader.after('hard_reset'); } catch (e) { log('reset: ' + e); }
     try { if (transport) await transport.disconnect(); } catch (e) { log('disconnect: ' + e); }
-    setBusy(false);
+    $('btnRead').disabled = !('serial' in navigator);
   }
-}
-
-$('btnRead').addEventListener('click', () => withRadio(async ({ chip, part, readNvs }) => {
-  const img = await readNvs('Leyendo NVS');
-  load(img, `radio (${chip}), 0x${part.offset.toString(16)}`);
-}));
-
-$('btnWrite').addEventListener('click', async () => {
-  if (busy) return;
-  let bin;
-  try { bin = generate(); } catch (e) { setStatus('Error: ' + e.message, true); return; }
-  if (!confirm(`Se va a escribir la NVS editada (${bin.length / 1024} KB) en la radio.\n\n` +
-               'Antes se descargará una copia de seguridad de la NVS actual. ¿Continuar?')) return;
-  await withRadio(async ({ loader, chip, part, readNvs, prog }) => {
-    if (part.guessed) throw new Error('No se ha encontrado la partición NVS en la tabla de particiones: no se escribe nada');
-    if (part.size !== bin.length)
-      throw new Error(`La partición NVS de la radio mide ${part.size} B y el .bin ${bin.length} B: no se escribe nada`);
-    const backup = await readNvs('Copia de seguridad de la NVS actual');
-    download(`nvs-backup-${stamp()}.bin`, backup, 'application/octet-stream');
-    log(`Copia de seguridad descargada (${backup.length} B)`);
-    prog.classList.remove('hidden'); prog.max = bin.length; prog.value = 0;
-    setStatus(`Escribiendo NVS en 0x${part.offset.toString(16)}…`);
-    await loader.writeFlash({
-      fileArray: [{ data: bin, address: part.offset }],
-      flashMode: 'keep', flashFreq: 'keep', flashSize: 'keep', eraseAll: false, compress: true,
-      reportProgress: (_i, written) => { prog.value = written; },
-    });
-    log('Escrito; verificando…');
-    const back = await readNvs('Verificando la escritura');
-    let diff = -1;
-    for (let i = 0; i < bin.length; i++) if (back[i] !== bin[i]) { diff = i; break; }
-    if (diff >= 0)
-      throw new Error(`La verificación ha fallado en 0x${(part.offset + diff).toString(16)}. Restaura la copia de seguridad descargada.`);
-    load(back, `radio (${chip}), 0x${part.offset.toString(16)}, tras escribir`);
-    setStatus(`NVS escrita y verificada (${bin.length} B). La radio se reinicia con los nuevos ajustes.`);
-    log('Verificación correcta');
-  });
 });
 
 $('fileIn').addEventListener('change', async (ev) => {
@@ -558,8 +503,7 @@ function load(img, source) {
     render();
     const p = state.parsed;
     setStatus(`${p.items.length} entradas de ${source}` + (p.problems.length ? ` · ${p.problems.length} avisos` : ''));
-    $('btnJson').disabled = false; $('btnBin').disabled = false; $('btnGen').disabled = false; dirty = 0;
-    $('btnWrite').disabled = busy || !('serial' in navigator);
+    $('btnJson').disabled = false; $('btnBin').disabled = false; $('btnGen').disabled = false; $('btnWrite').disabled = !('serial' in navigator); $('chExp').disabled = false; $('chImp').disabled = false; $('chImpL').style.opacity = ''; dirty = 0;
   } catch (e) {
     setStatus('Error: ' + e.message, true);
   }
@@ -669,8 +613,7 @@ function settingsRows() {
         : `<input type="number" data-e="cfg" data-o="${off}" data-l="${len}" data-s="${sg}" value="${raw}"> ${unit || ''}`;
       rows.push({ ns: 'sdr', key: 'cfg', group, label, value: ctl });
     }
-    if (cfg.version !== 1 || cfg.size !== 32) rows.push({ ns: 'sdr', key: 'cfg', group: 'Receptor', label: 'Bloque de ajustes',
-      value: `<span class="warn">versión ${cfg.version}, ${cfg.size} B: formato desconocido</span>` });
+    if (cfg.version !== 1 || cfg.size !== 32) c('Receptor', 'Bloque de ajustes', `<span class="warn">versión ${cfg.version}, ${cfg.size} B: formato desconocido</span>`);
   } else {
     rows.push({ ns: 'sdr', key: 'cfg', group: 'Receptor', label: 'Bloque de ajustes', value: '<span class="muted">sin guardar</span>' });
   }
@@ -823,13 +766,6 @@ function opts(list, sel, extra) {
   return (extra || []).concat(list.map((n, i) => [i, n])).map(([v, n]) => `<option value="${v}"${v === sel ? ' selected' : ''}>${esc(n)}</option>`).join('');
 }
 
-/* App ids as stored in mem/ext (0 = saved by an older firmware, 1..7 = FW.APPS) */
-function appOpts(sel) {
-  const l = [[0, 'antiguo'], ...Object.entries(FW.APPS).map(([id, n]) => [Number(id), n])];
-  if (!l.some(([v]) => v === sel)) l.push([sel, `? (${sel})`]);
-  return l.map(([v, n]) => `<option value="${v}"${v === sel ? ' selected' : ''}>${esc(n)}</option>`).join('');
-}
-
 function renderChannels() {
   const ch = channels();
   const draw = () => {
@@ -840,7 +776,7 @@ function renderChannels() {
         `<select ${d('mode')}>${opts(FW.MODES, c.mode)}</select>`, `<select ${d('step')}>${opts(FW.STEPS, c.step)}</select>`,
         `<select ${d('filter')}>${opts(FW.FILTERS, c.filter, [[-1, '—']])}</select>`,
         `<input class="nm" ${d('name')} maxlength="15" value="${esc(c.name)}">`,
-        `<select ${d('app')}>${appOpts(c.app)}</select>`,
+        `<select ${d('app')}>${[[0,'antiguo'],...Object.entries(FW.APPS).map(([k,n])=>[+k,n])].map(([v,n])=>`<option value="${v}"${v===c.app?' selected':''}>${esc(n)}</option>`).join('')}</select>`,
         `<input type="number" min="0" max="100" ${d('vol')} value="${c.vol ? c.vol - 1 : ''}" placeholder="—">`,
         `<label class="inline"><input type="checkbox" ${d('skip')}${c.flags & 1 ? ' checked' : ''}> no escanear</label>`];
     });
@@ -891,24 +827,159 @@ document.addEventListener('click', (e) => {
   }
 });
 
+/* ---- memorias <-> CSV de CHIRP --------------------------------------------- */
+const CH_HDR = ['Location', 'Name', 'Frequency', 'Duplex', 'Offset', 'Tone', 'rToneFreq', 'cToneFreq', 'DtcsCode', 'DtcsPolarity',
+                'RxDtcsCode', 'CrossMode', 'Mode', 'TStep', 'Skip', 'Power', 'Comment', 'URCALL', 'RPT1CALL', 'RPT2CALL', 'DVCODE'];
+const STEP_KHZ = [0.1, 1, 5, 10, 100, 1000, 8.33, 9, 12.5, 25, 6.25, 0.01];   /* en el orden de FW.STEPS */
+const MODE_OUT = ['USB', 'LSB', 'AM', 'AM', 'AM', 'AM', 'NFM', 'WFM'];          /* en el orden de FW.MODES */
+const MODE_IN = { USB: 0, LSB: 1, CW: 0, DIG: 0, PKT: 0, RTTY: 0, AM: 2, NAM: 2, FM: 6, NFM: 6, WFM: 7 };
+const csvCell = (x) => { x = String(x); return /[",\r\n]/.test(x) ? '"' + x.replace(/"/g, '""') + '"' : x; };
+function parseCsv(t) {
+  t = t.replace(/^\uFEFF/, '');
+  const hd = t.split(/\r?\n/)[0], cnt = (ch) => hd.split(ch).length - 1;     /* separador: el más frecuente en la cabecera */
+  const sep = [',', ';', '\t'].reduce((a, b) => (cnt(b) > cnt(a) ? b : a));
+  const rows = []; let r = [], f = '', q = false;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (q) { if (c === '"') { if (t[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += c; }
+    else if (c === '"') q = true;
+    else if (c === sep) { r.push(f); f = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && t[i + 1] === '\n') i++; r.push(f); f = ''; rows.push(r); r = []; }
+    else f += c;
+  }
+  if (f !== '' || r.length) { r.push(f); rows.push(r); }
+  return rows.filter((x) => x.some((y) => y.trim() !== ''));
+}
+document.addEventListener('click', (e) => {
+  if (e.target.id !== 'chExp') return;
+  const used = channels().filter((c) => c.used);
+  if (!used.length) { setStatus('No hay canales que exportar.', true); return; }
+  const lines = [CH_HDR.join(',')];
+  const byIdx = new Map(channels().map((c) => [c.index, c]));
+  for (let i = 0; i < FW.MEM_COUNT; i++) {                  /* siempre las 128 posiciones (8 páginas x 16): las vacías solo llevan Location */
+    const c = byIdx.get(i);
+    const o = !c || !c.used ? { Location: i } : { Location: c.index, Name: c.name, Frequency: (Number(c.hz) / 1e6).toFixed(6), Duplex: '', Offset: '0.000000', Tone: '',
+      rToneFreq: '88.5', cToneFreq: '88.5', DtcsCode: '023', DtcsPolarity: 'NN', RxDtcsCode: '023', CrossMode: 'Tone->Tone',
+      Mode: MODE_OUT[c.mode] || 'NFM', TStep: (STEP_KHZ[c.step] ?? 10).toFixed(2), Skip: c.flags & 1 ? 'S' : '' };
+    lines.push(CH_HDR.map((h) => csvCell(o[h] ?? '')).join(','));
+  }
+  download(`memorias-chirp-${stamp()}.csv`, lines.join('\r\n') + '\r\n', 'text/csv');
+  setStatus(`${used.length} canales exportados en formato CHIRP (${FW.MEM_COUNT} filas; las posiciones vacías solo llevan el número de Location).`);
+});
+document.addEventListener('change', async (e) => {
+  if (e.target.id !== 'chImp') return;
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  try {
+    const rows = parseCsv(await f.text()), head = rows[0].map((h) => h.trim().toLowerCase()), col = (n) => head.indexOf(n.toLowerCase());
+    if (col('frequency') < 0) throw new Error('No parece un CSV de CHIRP: falta la columna Frequency');
+    const get = (r, n) => (col(n) < 0 ? '' : (r[col(n)] || '').trim());
+    const data = [];
+    let bad = 0;
+    const base = rows.slice(1).some((r) => get(r, 'Location') === '0') ? 0 : 1;   /* Location numerada desde 0 o desde 1 */
+    for (const r of rows.slice(1)) {
+      if (!get(r, 'Frequency')) continue;                    /* memoria vacía de CHIRP (solo Location): no es un error */
+      try { if (!(toHz(get(r, 'Frequency')) > 0)) throw 0; data.push(r); } catch { bad++; }
+    }
+    if (!data.length) throw new Error('El CSV no tiene canales con frecuencia válida');
+    const replaceAll = confirm(`${data.length} canales en ${f.name}.\n\nAceptar: reemplazar TODAS las memorias de la radio.\nCancelar: añadirlos en las posiciones vacías.`);
+    if (replaceAll) { blobOf('mem', 'slots', FW.MEM_COUNT * FW.MEM_SLOT).fill(0); blobOf('mem', 'ext', FW.MEM_COUNT * 2).fill(0); blobOf('mem', 'hzhi', FW.MEM_COUNT).fill(0); }
+    const busy = replaceAll ? new Set() : new Set(channels().filter((c) => c.used).map((c) => c.index));
+    const taken = new Set(), place = [], queue = [];
+    for (const r of data) {                                  /* cada canal a su posición Location si está libre; si no, a la primera libre */
+      const L = get(r, 'Location'), t = /^\d+$/.test(L) ? +L - base : -1;
+      if (t >= 0 && t < FW.MEM_COUNT && !busy.has(t) && !taken.has(t)) { taken.add(t); place.push([t, r]); } else queue.push(r);
+    }
+    for (const r of queue) {
+      let t = 0; while (t < FW.MEM_COUNT && (busy.has(t) || taken.has(t))) t++;
+      if (t >= FW.MEM_COUNT) break;
+      taken.add(t); place.push([t, r]);
+    }
+    const n = place.length;
+    for (const [i, r] of place) {
+      const kh = parseFloat(get(r, 'TStep').replace(',', '.')); let st = 3;
+      if (!isNaN(kh)) STEP_KHZ.forEach((v, k) => { if (Math.abs(v - kh) < Math.abs(STEP_KHZ[st] - kh)) st = k; });
+      setCh(i, 'hz', get(r, 'Frequency')); setCh(i, 'mode', MODE_IN[get(r, 'Mode').toUpperCase()] ?? 6);
+      setCh(i, 'step', st); setCh(i, 'filter', -1); setCh(i, 'skip', get(r, 'Skip').toUpperCase() === 'S');
+      setCh(i, 'name', get(r, 'Name')); setCh(i, 'app', 1); setCh(i, 'vol', '');
+    }
+    dirty++; refresh(); showTab('canales');
+    const extra = data.length - n;
+    setStatus(`Importados ${n} canales de ${f.name}` + (bad ? `, ${bad} filas sin frecuencia válida omitidas` : '') + (extra > 0 ? `, ${extra} no caben (${FW.MEM_COUNT} posiciones)` : '') + '. Pulsa «Generar .bin editado».');
+  } catch (x) { setStatus('Error: ' + (x && x.message ? x.message : x), true); }
+});
+
 /* ---- generar .bin ---------------------------------------------------------- */
-/* Builds the edited partition and checks it parses back to exactly the edited items. */
-function generate() {
-    const bin = NVS.build(state.parsed, state.image.length), chk = NVS.parse(bin), same = (a, b) =>
-      a.ns === b.ns && a.key === b.key && a.type === b.type && (a.value instanceof Uint8Array ? hex(a.value, 1 << 20) === hex(b.value, 1 << 20) : String(a.value) === String(b.value));
-    const bad = chk.problems.length || chk.items.length !== state.parsed.items.length ||
-      !state.parsed.items.every((a) => chk.items.some((b) => same(a, b)));
-    if (bad) throw new Error('La verificación del .bin generado ha fallado: ' + chk.problems.join('; '));
-    log(`Generado: ${chk.pages.filter((g) => g.state !== 0xFFFFFFFF).length} páginas usadas de ${chk.pages.length}`);
-    bin.items = chk.items.length;
-    return bin;
+/* Rebuilds the partition from the edited items and re-parses it to check CRCs and values. */
+function makeEdited() {
+  const bin = NVS.build(state.parsed, state.image.length), chk = NVS.parse(bin), same = (a, b) =>
+    a.ns === b.ns && a.key === b.key && a.type === b.type && (a.value instanceof Uint8Array ? hex(a.value, 1 << 20) === hex(b.value, 1 << 20) : String(a.value) === String(b.value));
+  const bad = chk.problems.length || chk.items.length !== state.parsed.items.length ||
+    !state.parsed.items.every((a) => chk.items.some((b) => same(a, b)));
+  if (bad) throw new Error('La verificación del .bin generado ha fallado: ' + chk.problems.join('; '));
+  return { bin, chk };
 }
 $('btnGen').addEventListener('click', () => {
   try {
-    const bin = generate();
+    const { bin, chk } = makeEdited();
     download(`nvs-edit-${stamp()}.bin`, bin, 'application/octet-stream');
-    setStatus(`.bin generado (${bin.length} B): ${bin.items} variables, todos los CRC verificados.`);
+    setStatus(`.bin generado (${bin.length} B): ${chk.items.length} variables, todos los CRC verificados.`);
+    log(`Generado: ${chk.pages.filter((g) => g.state !== 0xFFFFFFFF).length} páginas usadas de ${chk.pages.length}`);
   } catch (e) { setStatus('Error: ' + e.message, true); }
+});
+
+/* ---- grabar en la radio ------------------------------------------------------ */
+$('btnWrite').addEventListener('click', async () => {
+  let transport = null, loader = null, writing = false;
+  const btn = $('btnWrite'), prog = $('prog');
+  btn.disabled = true;
+  try {
+    const { bin, chk } = makeEdited();                       /* lo que se grabe ya está validado */
+    const port = await navigator.serial.requestPort();
+    transport = new Transport(port, false);
+    loader = new ESPLoader({ transport, baudrate: 921600, terminal: term });
+    setStatus('Conectando con el cargador del chip…');
+    const chip = await loader.main();
+    log('Chip: ' + chip);
+    const table = await loader.readFlash(0x8000, 0xC00);
+    const part = NVS.findPartition(table, 1, 2) || { offset: 0x9000, size: 0x6000, label: 'nvs (por defecto)' };
+    if (part.size !== bin.length) throw new Error(`La partición NVS de la radio mide ${part.size} B y el .bin ${bin.length} B: no se graba nada.`);
+    prog.classList.remove('hidden'); prog.max = part.size; prog.value = 0;
+    setStatus('Leyendo la NVS actual de la radio…');
+    const cur = new Uint8Array(await loader.readFlash(part.offset, part.size, (_p, got) => { prog.value = got; }));
+    if (confirm('Antes de grabar: ¿descargar una copia de seguridad de la NVS actual de la radio?\n\nAceptar = descargar nvs-backup-….bin (recomendado)\nCancelar = continuar sin copia')) {
+      download(`nvs-backup-${stamp()}.bin`, cur, 'application/octet-stream'); log('Copia de seguridad descargada.');
+    } else log('Sin copia de seguridad.');
+    if (!confirm(`Se va a SOBRESCRIBIR la NVS de la radio (${chip}, 0x${part.offset.toString(16)}, ${part.size} B) con el .bin editado (${chk.items.length} variables).\n\n¿Grabar ahora?`)) {
+      setStatus('Grabación cancelada. La radio no se ha modificado.'); return;
+    }
+    setStatus('Grabando la NVS…'); writing = true; prog.max = bin.length; prog.value = 0;
+    /* esptool-js >= 0.5 exige un Uint8Array en fileArray[].data; las versiones antiguas pedían una cadena binaria.
+       Se prueba primero Uint8Array; si la librería rechaza el tipo (lo hace antes de borrar nada), se reintenta con cadena. */
+    const flash = (data) => loader.writeFlash({ fileArray: [{ data, address: part.offset }], flashSize: 'keep', flashMode: 'keep', flashFreq: 'keep',
+      eraseAll: false, compress: true, reportProgress: (_i, written, total) => { prog.max = total; prog.value = written; } });
+    try { await flash(Uint8Array.from(bin)); }
+    catch (e) {
+      if (!/must be a/i.test(e && e.message ? e.message : String(e))) throw e;
+      log('esptool-js pide otro tipo de dato; reintentando con cadena binaria.');
+      await flash(loader.ui8ToBstr ? loader.ui8ToBstr(bin) : Array.from(bin, (b) => String.fromCharCode(b)).join(''));
+    }
+    setStatus('Verificando lo grabado…'); prog.max = part.size; prog.value = 0;
+    const back = new Uint8Array(await loader.readFlash(part.offset, part.size, (_p, got) => { prog.value = got; }));
+    if (back.some((b, i) => b !== bin[i])) throw new Error('Verificación fallida: lo leído de la radio no coincide con lo grabado.');
+    writing = false;
+    load(back, `radio (${chip}) tras grabar`);
+    setStatus(`NVS grabada y verificada (${chk.items.length} variables). La radio se reinicia.`);
+  } catch (e) {
+    console.error(e);
+    setStatus('Error: ' + (e && e.message ? e.message : e) + (writing ? ' — la NVS pudo quedar a medias: vuelve a grabar o restaura la copia de seguridad.' : ''), true);
+    log('ERROR ' + (e && e.stack ? e.stack : e));
+  } finally {
+    prog.classList.add('hidden');
+    try { if (loader) await loader.after('hard_reset'); } catch (e) { log('reset: ' + e); }
+    try { if (transport) await transport.disconnect(); } catch (e) { log('disconnect: ' + e); }
+    btn.disabled = !(state.parsed && 'serial' in navigator);
+  }
 });
 </script>
 </body>
