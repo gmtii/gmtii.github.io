@@ -1,5 +1,4 @@
-# hamconsole.github.io
-Sitio del HAMCONSOLE
+# gmtii.github.io
 
 <img width="720" height="1280" alt="image" src="https://github.com/user-attachments/assets/f771bcd0-7ce5-4726-a8b7-9f7bbcb5979c" />
 
