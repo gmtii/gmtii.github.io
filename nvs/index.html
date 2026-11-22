@@ -409,13 +409,15 @@ function decodeChannels(slots, ext, hzhi) {
   for (let i = 0; i < n; i++) {
     const o = i * FW.MEM_SLOT;
     const dv = new DataView(slots.buffer, slots.byteOffset + o, FW.MEM_SLOT);
-    const hz = BigInt(dv.getUint32(0, true)) | (BigInt(hzhi && i < hzhi.length ? hzhi[i] : 0) << 32n);
+    const lo = dv.getUint32(0, true), hz = BigInt(lo) | (BigInt(hzhi && i < hzhi.length ? hzhi[i] : 0) << 32n);
+    let nb = slots.subarray(o + 8, o + 24), z = nb.findIndex((x) => x === 0 || x === 0xFF);   /* el nombre acaba en 0 (o 0xFF si está borrado) */
+    if (z >= 0) nb = nb.subarray(0, z);
     const app = ext && 2 * i + 1 < ext.length ? ext[2 * i] : 0;
     const vol = ext && 2 * i + 1 < ext.length ? ext[2 * i + 1] : 0;
     out.push({
       index: i, page: Math.floor(i / FW.MEM_PER_PAGE) + 1, pos: (i % FW.MEM_PER_PAGE) + 1,
-      hz, used: hz !== 0n, mode: slots[o + 4], step: slots[o + 5], filter: dv.getInt8(6), flags: slots[o + 7],
-      name: new TextDecoder().decode(slots.subarray(o + 8, o + 24)).replace(/\0.*$/s, ''),
+      hz, used: hz !== 0n && lo !== 0xFFFFFFFF, mode: slots[o + 4], step: slots[o + 5], filter: dv.getInt8(6), flags: slots[o + 7],
+      name: new TextDecoder().decode(nb).replace(/[\u0000-\u001f\u007f\ufffd]/g, '').trim(),
       app, vol,
     });
   }
@@ -457,6 +459,22 @@ if (!('serial' in navigator)) { $('btnRead').disabled = true; $('serialNote').cl
 /* ---- reading ------------------------------------------------------------- */
 const term = { clean() {}, writeLine: (t) => log(t), write: (t) => log(t) };
 
+/* Reinicia la radio en modo normal y cierra el puerto. El loader.after('hard_reset') de esptool-js 0.7.0
+   solo baja RTS (no lo sube antes), así que tras leer/grabar el chip se quedaba en el cargador.
+   Secuencia de esptool.py: DTR=0 (IO0 libre, arranque normal), RTS=1 (EN a nivel bajo), espera, RTS=0. */
+async function resetRadio(transport) {
+  if (!transport) return;
+  try {
+    log('Reiniciando la radio…');
+    await transport.setDTR(false);
+    await transport.setRTS(true);
+    await new Promise((r) => setTimeout(r, 200));
+    await transport.setRTS(false);
+    await new Promise((r) => setTimeout(r, 200));
+  } catch (e) { log('reset: ' + e); }
+  try { await transport.disconnect(); } catch (e) { log('disconnect: ' + e); }
+}
+
 $('btnRead').addEventListener('click', async () => {
   let transport = null, loader = null;
   $('btnRead').disabled = true;
@@ -482,8 +500,7 @@ $('btnRead').addEventListener('click', async () => {
     log('ERROR ' + (e && e.stack ? e.stack : e));
   } finally {
     prog.classList.add('hidden');
-    try { if (loader) await loader.after('hard_reset'); } catch (e) { log('reset: ' + e); }
-    try { if (transport) await transport.disconnect(); } catch (e) { log('disconnect: ' + e); }
+    await resetRadio(transport);
     $('btnRead').disabled = !('serial' in navigator);
   }
 });
@@ -613,7 +630,8 @@ function settingsRows() {
         : `<input type="number" data-e="cfg" data-o="${off}" data-l="${len}" data-s="${sg}" value="${raw}"> ${unit || ''}`;
       rows.push({ ns: 'sdr', key: 'cfg', group, label, value: ctl });
     }
-    if (cfg.version !== 1 || cfg.size !== 32) c('Receptor', 'Bloque de ajustes', `<span class="warn">versión ${cfg.version}, ${cfg.size} B: formato desconocido</span>`);
+    if (cfg.version !== 1 || cfg.size !== 32) rows.push({ ns: 'sdr', key: 'cfg', group: 'Receptor', label: 'Bloque de ajustes',
+      value: `<span class="warn">versión ${cfg.version}, ${cfg.size} B: formato desconocido</span>` });
   } else {
     rows.push({ ns: 'sdr', key: 'cfg', group: 'Receptor', label: 'Bloque de ajustes', value: '<span class="muted">sin guardar</span>' });
   }
@@ -855,16 +873,16 @@ document.addEventListener('click', (e) => {
   const used = channels().filter((c) => c.used);
   if (!used.length) { setStatus('No hay canales que exportar.', true); return; }
   const lines = [CH_HDR.join(',')];
-  const byIdx = new Map(channels().map((c) => [c.index, c]));
-  for (let i = 0; i < FW.MEM_COUNT; i++) {                  /* siempre las 128 posiciones (8 páginas x 16): las vacías solo llevan Location */
-    const c = byIdx.get(i);
-    const o = !c || !c.used ? { Location: i } : { Location: c.index, Name: c.name, Frequency: (Number(c.hz) / 1e6).toFixed(6), Duplex: '', Offset: '0.000000', Tone: '',
+  for (const c of used) {                                    /* como el propio CHIRP: solo las memorias con canal, Location = posición 0..127 */
+    const o = { Location: c.index, Name: c.name, Frequency: (Number(c.hz) / 1e6).toFixed(6), Duplex: '', Offset: '0.000000', Tone: '',
       rToneFreq: '88.5', cToneFreq: '88.5', DtcsCode: '023', DtcsPolarity: 'NN', RxDtcsCode: '023', CrossMode: 'Tone->Tone',
       Mode: MODE_OUT[c.mode] || 'NFM', TStep: (STEP_KHZ[c.step] ?? 10).toFixed(2), Skip: c.flags & 1 ? 'S' : '' };
     lines.push(CH_HDR.map((h) => csvCell(o[h] ?? '')).join(','));
   }
-  download(`memorias-chirp-${stamp()}.csv`, lines.join('\r\n') + '\r\n', 'text/csv');
-  setStatus(`${used.length} canales exportados en formato CHIRP (${FW.MEM_COUNT} filas; las posiciones vacías solo llevan el número de Location).`);
+  /* BOM UTF-8: sin él, LibreOffice/Excel a veces lo abren como UTF-16 («Unicode») y sale en chino.
+     CHIRP lo lee con encoding='utf-8-sig' (ignora el BOM) y nuestro importador también lo quita. */
+  download(`memorias-chirp-${stamp()}.csv`, '﻿' + lines.join('\r\n') + '\r\n', 'text/csv;charset=utf-8');
+  setStatus(`${used.length} canales exportados en formato CHIRP (Location 0-${FW.MEM_COUNT - 1} = página-posición menos uno).`);
 });
 document.addEventListener('change', async (e) => {
   if (e.target.id !== 'chImp') return;
@@ -976,8 +994,7 @@ $('btnWrite').addEventListener('click', async () => {
     log('ERROR ' + (e && e.stack ? e.stack : e));
   } finally {
     prog.classList.add('hidden');
-    try { if (loader) await loader.after('hard_reset'); } catch (e) { log('reset: ' + e); }
-    try { if (transport) await transport.disconnect(); } catch (e) { log('disconnect: ' + e); }
+    await resetRadio(transport);
     btn.disabled = !(state.parsed && 'serial' in navigator);
   }
 });
