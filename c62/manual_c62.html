@@ -1,0 +1,497 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manual C62 OpenRTX</title>
+<meta name="description" content="Manual de uso del firmware OpenRTX para la Retevis C62: teclas, modos, memorias, TETRA, DMR, NXDN, ACARS, AIS y ajustes.">
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --surface: #ffffff;
+    --text: #1c2430;
+    --muted: #5b6676;
+    --border: #dde2e9;
+    --accent: #1f6feb;
+    --accent-soft: #e7f0fe;
+    --kbd-bg: #eef1f5;
+    --kbd-border: #c4ccd6;
+    --note-bg: #fff7e0;
+    --note-border: #e8c56a;
+    --warn-bg: #fdecec;
+    --warn-border: #e3a0a0;
+    --code-bg: #eef1f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #11151b;
+      --surface: #181d25;
+      --text: #e3e8ef;
+      --muted: #9aa6b5;
+      --border: #2b333f;
+      --accent: #5b9cff;
+      --accent-soft: #1b2a40;
+      --kbd-bg: #232a35;
+      --kbd-border: #3a4452;
+      --note-bg: #2a2412;
+      --note-border: #7a6526;
+      --warn-bg: #2c1818;
+      --warn-border: #7a3838;
+      --code-bg: #232a35;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #11151b;
+    --surface: #181d25;
+    --text: #e3e8ef;
+    --muted: #9aa6b5;
+    --border: #2b333f;
+    --accent: #5b9cff;
+    --accent-soft: #1b2a40;
+    --kbd-bg: #232a35;
+    --kbd-border: #3a4452;
+    --note-bg: #2a2412;
+    --note-border: #7a6526;
+    --warn-bg: #2c1818;
+    --warn-border: #7a3838;
+    --code-bg: #232a35;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .layout {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 16px;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 32px;
+  }
+  @media (min-width: 960px) {
+    .layout { grid-template-columns: 240px 1fr; }
+    nav.toc { position: sticky; top: 16px; align-self: start;
+              max-height: calc(100vh - 32px); overflow-y: auto; }
+  }
+  header.top {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 32px 16px 8px;
+  }
+  header.top h1 { margin: 0 0 4px; font-size: 1.9rem; line-height: 1.2; }
+  header.top p { margin: 0; color: var(--muted); }
+
+  nav.toc {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-top: 16px;
+    font-size: 0.92rem;
+  }
+  nav.toc strong { display: block; margin-bottom: 6px; }
+  nav.toc ol { margin: 0; padding-left: 20px; }
+  nav.toc li { margin: 3px 0; }
+  nav.toc a { color: var(--text); text-decoration: none; }
+  nav.toc a:hover { color: var(--accent); }
+
+  main { min-width: 0; padding-bottom: 64px; }
+  section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 4px 22px 18px;
+    margin-top: 16px;
+  }
+  h2 { font-size: 1.35rem; margin: 18px 0 8px; scroll-margin-top: 16px; }
+  h3 { font-size: 1.08rem; margin: 20px 0 6px; scroll-margin-top: 16px; }
+  p, li { max-width: 72ch; }
+  a { color: var(--accent); }
+
+  kbd {
+    display: inline-block;
+    min-width: 1.6em;
+    padding: 0 6px;
+    border: 1px solid var(--kbd-border);
+    border-bottom-width: 2px;
+    border-radius: 5px;
+    background: var(--kbd-bg);
+    font: 600 0.85em/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+    text-align: center;
+    white-space: nowrap;
+  }
+  code {
+    background: var(--code-bg);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font: 0.88em ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  pre {
+    background: var(--code-bg);
+    border-radius: 8px;
+    padding: 12px 14px;
+    overflow-x: auto;
+    font: 0.85em/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  .table-wrap { overflow-x: auto; margin: 10px 0 14px; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.94rem; }
+  th, td {
+    text-align: left;
+    vertical-align: top;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  th { background: var(--accent-soft); font-weight: 600; }
+  td:first-child { white-space: nowrap; }
+
+  .note, .warn {
+    border-left: 4px solid var(--note-border);
+    background: var(--note-bg);
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin: 12px 0;
+  }
+  .warn { border-left-color: var(--warn-border); background: var(--warn-bg); }
+  .note p, .warn p { margin: 0; }
+
+  .modes { display: grid; gap: 10px; margin: 12px 0;
+           grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+  .mode {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+  }
+  .mode b { display: block; margin-bottom: 2px; }
+  .mode span { color: var(--muted); font-size: 0.9rem; }
+
+  footer { color: var(--muted); font-size: 0.85rem; margin-top: 24px; }
+
+  @media print {
+    nav.toc { display: none; }
+    .layout { display: block; }
+    section { break-inside: avoid-page; border: none; padding: 0; }
+  }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Retevis C62 con OpenRTX — manual de uso</h1>
+  <p>Teclas, modos, memorias y ajustes del firmware de la rama <code>c62/dmr</code>, 22 de noviembre de 2026.</p>
+</header>
+
+<div class="layout">
+<nav class="toc" aria-label="Índice">
+  <strong>Índice</strong>
+  <ol>
+    <li><a href="#teclas">Teclas</a></li>
+    <li><a href="#vfo">Pantalla principal</a></li>
+    <li><a href="#macros">Menú de macros</a></li>
+    <li><a href="#modos">Modos</a></li>
+    <li><a href="#memorias">Memorias</a></li>
+    <li><a href="#tetra">TETRA</a></li>
+    <li><a href="#dmr">DMR</a></li>
+    <li><a href="#nxdn">NXDN</a></li>
+    <li><a href="#am">AM (banda aérea)</a></li>
+    <li><a href="#acars">ACARS</a></li>
+    <li><a href="#ais">AIS</a></li>
+    <li><a href="#radar">Radar</a></li>
+    <li><a href="#espectro">Espectro</a></li>
+    <li><a href="#radiofm">Radio FM</a></li>
+    <li><a href="#linterna">Linterna</a></li>
+    <li><a href="#ajustes">Menú Settings</a></li>
+    <li><a href="#guardado">Qué se guarda</a></li>
+    <li><a href="#pc">Memorias en el PC</a></li>
+    <li><a href="#grabar">Grabar el firmware</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<section id="teclas">
+  <h2>1. Teclas</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Tecla</th><th>Nombre en el manual</th><th>Uso general</th></tr>
+    <tr><td>Tecla verde</td><td><kbd>ENTER</kbd></td><td>Abrir el menú, confirmar, elegir</td></tr>
+    <tr><td>Tecla roja</td><td><kbd>ESC</kbd></td><td>Volver, cancelar; en el VFO, pasar a memorias y viceversa</td></tr>
+    <tr><td>Botón redondo, arriba / abajo</td><td><kbd>▲</kbd> <kbd>▼</kbd></td><td>Cambiar frecuencia, recorrer listas</td></tr>
+    <tr><td>P1</td><td><kbd>P1</kbd></td><td>Lista de memorias</td></tr>
+    <tr><td>P2</td><td><kbd>P2</kbd></td><td>Guardar el VFO en memoria; en una memoria, pasarla al VFO</td></tr>
+    <tr><td>Teclado</td><td><kbd>0</kbd>–<kbd>9</kbd> <kbd>*</kbd> <kbd>#</kbd></td><td>Frecuencias, páginas, funciones de cada modo</td></tr>
+    <tr><td>Tecla lateral</td><td><kbd>MONI</kbd></td><td>Mantenida, con otra tecla: menú de macros</td></tr>
+    <tr><td>PTT</td><td><kbd>PTT</kbd></td><td>Transmitir (sólo FM, M17 y DMR con transmisión)</td></tr>
+  </table></div>
+  <p>Algunas teclas actúan al mantenerlas pulsadas (pulsación larga), por ejemplo <kbd>#</kbd> en la página de vecinas de TETRA.</p>
+</section>
+
+<section id="vfo">
+  <h2>2. Pantalla principal: VFO y memoria</h2>
+  <p>La radio trabaja en <b>VFO</b> (frecuencia libre) o en <b>memoria</b>. La línea de información empieza por <code>VFO</code> o por el número de memoria (<code>M001</code>, en amarillo). La barra superior muestra el modo, el estado del receptor (<code>SYNC</code>, <code>LOCK</code>, <code>RX</code>, <code>TX</code>…), la potencia o <code>RX only</code> y la batería.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Tecla</th><th>En el VFO</th><th>En una memoria</th></tr>
+    <tr><td><kbd>0</kbd>–<kbd>9</kbd></td><td>Teclear la frecuencia: RX, <kbd>ENTER</kbd>, luego TX, <kbd>ENTER</kbd>; <kbd>ESC</kbd> cancela</td><td>Abrir las páginas del modo (las que abre <kbd>*</kbd>); <kbd>0</kbd> vuelve a la principal</td></tr>
+    <tr><td><kbd>▲</kbd> <kbd>▼</kbd></td><td>Subir / bajar la frecuencia un paso</td><td>Memoria siguiente / anterior (salta los huecos)</td></tr>
+    <tr><td><kbd>ENTER</kbd></td><td colspan="2">Menú principal (Banks, Channels, Contacts, Settings, Info, About)</td></tr>
+    <tr><td><kbd>ESC</kbd></td><td>Pasar a memorias (la última usada)</td><td>Volver al VFO</td></tr>
+    <tr><td><kbd>P1</kbd></td><td colspan="2">Lista de memorias (ver <a href="#memorias">Memorias</a>)</td></tr>
+    <tr><td><kbd>P2</kbd></td><td>Guardar el VFO en una memoria</td><td>Pasar la memoria al VFO</td></tr>
+    <tr><td><kbd>*</kbd></td><td colspan="2">Páginas del modo: TETRA, ACARS, AIS, DMR</td></tr>
+    <tr><td><kbd>#</kbd></td><td colspan="2">FM: tono de 1750 Hz mientras se mantiene. M17: indicativo de destino</td></tr>
+  </table></div>
+</section>
+
+<section id="macros">
+  <h2>3. Menú de macros (<kbd>MONI</kbd> + tecla)</h2>
+  <p>Manteniendo <kbd>MONI</kbd> aparece el menú de macros con el valor actual de cada tecla. Con <b>Settings &gt; Accessibility &gt; Macro Latch</b> activo (por defecto), una pulsación larga de <kbd>MONI</kbd> deja el menú fijo sin tener que mantenerla, y otra lo quita.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Tecla</th><th>Función</th></tr>
+    <tr><td><kbd>1</kbd></td><td>FM: modo del subtono CTCSS, por turnos: apagado, sólo RX, sólo TX, TX y RX</td></tr>
+    <tr><td><kbd>2</kbd> / <kbd>3</kbd></td><td>FM: subtono CTCSS anterior / siguiente</td></tr>
+    <tr><td><kbd>4</kbd></td><td>FM: ancho de banda 12,5 / 25 kHz</td></tr>
+    <tr><td><kbd>5</kbd></td><td>Cambiar de modo: FM, M17, TETRA, DMR, NXDN, AM, ACARS, AIS</td></tr>
+    <tr><td><kbd>6</kbd></td><td>Potencia: 1 W, 2,5 W, 5 W</td></tr>
+    <tr><td><kbd>7</kbd> / <kbd>8</kbd></td><td>Paso de frecuencia menor / mayor</td></tr>
+    <tr><td><kbd>9</kbd></td><td>Bloquear / desbloquear el teclado (<code>Lck</code>)</td></tr>
+    <tr><td><kbd>▲</kbd> / <kbd>▼</kbd></td><td>Subir / bajar el squelch</td></tr>
+    <tr><td><kbd>0</kbd></td><td>Espectro alrededor de la frecuencia (sólo en el VFO)</td></tr>
+    <tr><td><kbd>#</kbd></td><td>Radio FM comercial</td></tr>
+    <tr><td><kbd>*</kbd></td><td>Linterna</td></tr>
+  </table></div>
+</section>
+
+<section id="modos">
+  <h2>4. Modos</h2>
+  <p><kbd>MONI</kbd> + <kbd>5</kbd> los recorre en este orden. Los marcados como recepción no transmiten: el PTT no hace nada.</p>
+  <div class="modes">
+    <div class="mode"><b>FM</b><span>Voz analógica, con CTCSS. Transmite.</span></div>
+    <div class="mode"><b>M17</b><span>Voz digital M17. Transmite.</span></div>
+    <div class="mode"><b>TETRA</b><span>Recepción de celdas TETRA (TMO): llamadas en claro, SDS, grupos, roaming.</span></div>
+    <div class="mode"><b>DMR</b><span>Recepción DMR; transmisión simplex si el firmware lleva el codificador.</span></div>
+    <div class="mode"><b>NXDN</b><span>Recepción NXDN48.</span></div>
+    <div class="mode"><b>AM</b><span>Recepción AM, banda aérea.</span></div>
+    <div class="mode"><b>ACARS</b><span>Mensajes de datos de aviación.</span></div>
+    <div class="mode"><b>AIS</b><span>Posiciones de barcos.</span></div>
+  </div>
+  <p>La radio recibe de 18 a 660 MHz, con mejor sensibilidad en 136–174 y 400–480 MHz, y sólo transmite en esas dos bandas.</p>
+  <div class="note"><p>La voz DMR y NXDN y la transmisión DMR sólo están si el firmware se compiló con mbelib y OpenDMR (códec AMBE+2, con patentes en algunos países). Sin ellos esos modos muestran las llamadas pero no se oyen.</p></div>
+</section>
+
+<section id="memorias">
+  <h2>5. Memorias</h2>
+  <p>Hay 128 memorias, M001 a M128, cada una en su sitio fijo y agrupadas en <b>páginas de 6</b>: la página 0 tiene M001–M006, la 1 M007–M012, etc. El número de página sale en el título. Un sitio vacío se ve como <code>M009 -</code> en gris. Una memoria guarda el canal entero: modo, frecuencias RX y TX, potencia, ancho de banda y subtonos.</p>
+
+  <h3>Guardar el VFO (<kbd>P2</kbd> en el VFO)</h3>
+  <div class="table-wrap"><table>
+    <tr><th>Tecla</th><th>Acción</th></tr>
+    <tr><td><kbd>0</kbd>–<kbd>9</kbd></td><td>Ir a esa página, al primer sitio vacío</td></tr>
+    <tr><td><kbd>▲</kbd> <kbd>▼</kbd></td><td>Elegir sitio, vacío o una memoria para sobrescribir</td></tr>
+    <tr><td><kbd>ENTER</kbd></td><td>Guardar, con nombre de modo y frecuencia (<code>T 390.2125</code>)</td></tr>
+    <tr><td><kbd>#</kbd> dos veces</td><td>Borrar la memoria elegida (su sitio queda vacío)</td></tr>
+    <tr><td><kbd>ESC</kbd> / <kbd>P2</kbd></td><td>Volver al VFO</td></tr>
+  </table></div>
+
+  <h3>Lista de memorias (<kbd>P1</kbd>)</h3>
+  <p>Se abre con la memoria en uso marcada. <kbd>▲</kbd> <kbd>▼</kbd> recorren las memorias saltando los huecos, <kbd>0</kbd>–<kbd>9</kbd> van a la primera memoria de esa página, <kbd>ENTER</kbd> la carga y <kbd>ESC</kbd> o <kbd>P1</kbd> vuelven.</p>
+
+  <h3>En una memoria</h3>
+  <p><kbd>P2</kbd> pasa la memoria al VFO para sintonizar desde ahí. Los números abren directamente las páginas del modo: en TETRA <kbd>1</kbd>–<kbd>9</kbd>, en ACARS <kbd>1</kbd> los mensajes, en AIS y DMR <kbd>1</kbd> las estaciones y <kbd>2</kbd> el radar; <kbd>0</kbd> vuelve a la pantalla principal.</p>
+</section>
+
+<section id="tetra">
+  <h2>6. TETRA</h2>
+  <p>Recepción del enlace descendente de una celda (TMO). Sintoniza la portadora principal de la celda. El LED verde se enciende mientras la radio está sincronizada.</p>
+
+  <h3>Pantalla principal</h3>
+  <div class="table-wrap"><table>
+    <tr><th>Estado</th><th>Qué muestra</th></tr>
+    <tr><td>Sin señal</td><td><code>T searching</code> (o <code>T roaming</code> si el roaming está buscando celda)</td></tr>
+    <tr><td>En una celda</td><td><code>T &lt;MCC&gt;-&lt;MNC&gt; LA &lt;n&gt;</code>; en la línea 1 el último SDS o las cifras del demodulador</td></tr>
+    <tr><td>Llamada</td><td>Quién habla, grupo (<code>G</code>) o individual llamado, celda y estado: <code>Voice</code>, <code>Idle</code>, <code>Encrypted</code>, <code>Encrypted?</code>, <code>Filtered</code></td></tr>
+  </table></div>
+  <p>Cifras del demodulador, por ejemplo <code>e11% -234Hz o0 r1</code>: error de fase (10–20 % es señal limpia; por encima de ~45 % no descodifica), desviación de portadora, bloques perdidos (<code>o</code>, debe quedarse en 0) y reinicios (<code>r</code>).</p>
+  <p>Insignias de la barra superior: <code>SYNC</code> / <code>NO SYNC</code>, <code>UL</code> escuchando el uplink, <code>F</code> grupos seleccionados, <code>X</code> grupos excluidos y <code>R</code> roaming (verde con borde: activo; naranja relleno: buscando celda). La hora que emite la red aparece en la barra superior en lugar de <code>RX only</code>.</p>
+  <p>Una llamada en claro que se establece en otra portadora de la celda se sigue automáticamente y se vuelve a la principal al terminar.</p>
+
+  <h3>Páginas (<kbd>*</kbd> las recorre; un número va directo; <kbd>0</kbd> vuelve)</h3>
+  <div class="table-wrap"><table>
+    <tr><th>Página</th><th>Contenido</th><th>Teclas</th></tr>
+    <tr><td>1 Diagnóstico</td><td>Sincronismo, error de fase, AFC, celda, última llamada y tráfico, qué no se reprodujo y por qué</td><td>—</td></tr>
+    <tr><td>2 SDS</td><td>Últimos 10 mensajes cortos: texto, estados, posiciones LIP</td><td><kbd>▲</kbd> <kbd>▼</kbd> recorrer</td></tr>
+    <tr><td>3 Grupos</td><td>Grupos oídos, llamadas, emisores</td><td><kbd>ENTER</kbd> seleccionar (hasta 8, en verde); <kbd>#</kbd> excluir (hasta 8, <code>X</code> en gris)</td></tr>
+    <tr><td>4 Radios</td><td>Radios oídos, último grupo, actividad y posición</td><td><kbd>▲</kbd> <kbd>▼</kbd></td></tr>
+    <tr><td>5 Llamadas</td><td>Llamadas oídas: destino, quién habla, duración, cifrado</td><td><kbd>#</kbd> activar / desactivar <b>Late calls</b></td></tr>
+    <tr><td>6 Celda</td><td>Red, color, área, frecuencias, servicios, carga, hora de red</td><td><kbd>ENTER</kbd> escuchar el uplink / volver</td></tr>
+    <tr><td>7 Vecinas</td><td>Celdas vecinas anunciadas, o el resultado del escaneo</td><td><kbd>#</kbd> escanear (al soltar); <kbd>#</kbd> mantenida roaming on/off; <kbd>ENTER</kbd> sintonizar la elegida; <kbd>ESC</kbd> parar</td></tr>
+    <tr><td>8 Símbolos</td><td>Constelación e histograma del discriminador</td><td>—</td></tr>
+    <tr><td>9 Mapa</td><td>Radios con posición sobre el radar del QTH</td><td><kbd>▲</kbd> <kbd>▼</kbd> elegir; <kbd>#</kbd> alcance</td></tr>
+  </table></div>
+
+  <h3>Grupos: seleccionar y excluir</h3>
+  <p>Con grupos <b>seleccionados</b> sólo suenan las llamadas en claro de esos grupos. Un grupo <b>excluido</b> nunca suena ni se sigue a otra portadora, aunque sus llamadas se muestran (<code>Filtered</code>). Seleccionar un grupo lo quita de los excluidos y viceversa. Pulsar otra vez la misma tecla lo deshace.</p>
+
+  <h3>Roaming</h3>
+  <p>Para moverse entre celdas de una misma red. Con el roaming activo, la radio guarda la celda y sus vecinas de la misma red (MCC-MNC) como tabla. Si se pierde el sincronismo durante 3 s, escanea la tabla y sintoniza la celda más fuerte de esa red; el VFO la sigue. Si no encuentra ninguna, lo reintenta cada 10 s. La tabla sólo se sustituye cuando se recibe bien una celda nueva de la red y anuncia sus vecinas. Nunca sintoniza celdas de otra red.</p>
+  <p>Se activa en <b>Settings &gt; TETRA &gt; Roaming</b> o manteniendo <kbd>#</kbd> en la página 7, y se guarda al apagar.</p>
+
+  <h3>Uplink</h3>
+  <p>En la página 6, <kbd>ENTER</kbd> pasa a escuchar lo que los terminales transmiten a la celda: establecimientos, peticiones para hablar, SDS y voz en claro. La barra superior muestra <code>UL</code>. Otra pulsación vuelve al enlace descendente.</p>
+
+  <h3>Opciones (Settings &gt; TETRA)</h3>
+  <div class="table-wrap"><table>
+    <tr><th>Opción</th><th>Qué hace</th><th>Al encender</th></tr>
+    <tr><td>Roaming</td><td>Roaming entre celdas de la red (arriba)</td><td>Se guarda</td></tr>
+    <tr><td>AFC</td><td>Corrección automática de frecuencia: ajusta la sintonía fina hasta centrar la portadora; converge en unos 20 s</td><td>Se guarda (On)</td></tr>
+    <tr><td>Late calls</td><td>Reproduce también llamadas cuyo establecimiento no se oyó, si su voz pasa el CRC</td><td>Off</td></tr>
+    <tr><td>Encrypted</td><td><code>Mute</code> / <code>Play</code>: reproducir también las cifradas y las de cifrado desconocido</td><td>Mute</td></tr>
+    <tr><td>Tones</td><td>Tonos de establecimiento, prioridad, fin de llamada y cambio de celda</td><td>On</td></tr>
+  </table></div>
+  <div class="warn"><p>Una llamada sólo se da por <b>en claro</b> si se oyó su establecimiento (D-SETUP o D-CONNECT) sin cifrado. Con <b>Late calls</b> o <b>Encrypted = Play</b>, una llamada cifrada extremo a extremo cuyo establecimiento se perdió sonará como ruido.</p></div>
+  <p><b>Tonos:</b> suenan sólo para llamadas que se van a reproducir (de voz, en claro o con Encrypted = Play, y que pasan la selección y exclusión de grupos). El de prioridad sustituye al de establecimiento en llamadas de prioridad 12–15 (preferentes y de emergencia).</p>
+</section>
+
+<section id="dmr">
+  <h2>7. DMR</h2>
+  <p>Recepción de repetidores (los dos slots), simplex y hotspots. Sintoniza la salida del repetidor o la frecuencia simplex. Se reproduce un solo slot: el primero que empieza a hablar, hasta que termina su llamada. Las cifradas se muestran pero no suenan.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Estado</th><th>Qué muestra</th></tr>
+    <tr><td>Sin señal</td><td><code>SEARCH</code> / <code>DMR searching</code></td></tr>
+    <tr><td>Enganchado</td><td><code>LOCK</code>, tipo (<code>RPT</code> repetidor, <code>MS</code>, <code>DM</code> directo) y código de color</td></tr>
+    <tr><td>Llamada</td><td>Alias o ID de quien habla, TG o ID llamado, slot, <code>Voice</code> / <code>Encrypted</code></td></tr>
+  </table></div>
+  <p><b>Posiciones:</b> se descodifican los informes LRRP y el GPS en la voz. <kbd>*</kbd> abre la página de estaciones (alias, locator, coordenadas, distancia y rumbo desde el QTH); <kbd>▲</kbd> <kbd>▼</kbd> las recorren y <kbd>ENTER</kbd> las muestra en el <a href="#radar">radar</a>.</p>
+  <p><b>Transmisión simplex</b> (si el firmware la lleva): el PTT hace una llamada en modo directo. Se configura en <b>Settings &gt; DMR</b>:</p>
+  <div class="table-wrap"><table>
+    <tr><th>Entrada</th><th>Uso</th></tr>
+    <tr><td>DMR ID</td><td>ID propio (sin él, el PTT no hace nada)</td></tr>
+    <tr><td>TG/ID</td><td>Grupo de una llamada de grupo, o radio de una privada</td></tr>
+    <tr><td>Call</td><td>Group o Private</td></tr>
+    <tr><td>CC</td><td>Código de color 0–15</td></tr>
+    <tr><td>Slot</td><td>TS1 o TS2</td></tr>
+    <tr><td>TX Polarity</td><td>Normal, o Inverted si el otro lado no oye nada</td></tr>
+  </table></div>
+</section>
+
+<section id="nxdn">
+  <h2>8. NXDN</h2>
+  <p>Recepción NXDN48 (canales de 6,25 kHz). La barra superior muestra <code>SYNC</code> o <code>SEARCH</code>; debajo, el tipo de canal (convencional, tráfico, control) y el RAN. En una llamada aparece una tarjeta con el grupo (<code>TG</code>) o unidad (<code>ID</code>) llamada y quién habla; sin llamada, las tramas descodificadas, las erróneas y las perdidas. Las llamadas que declaran cifrado no suenan.</p>
+</section>
+
+<section id="am">
+  <h2>9. AM (banda aérea)</h2>
+  <p>Recepción AM con el detector de la radio y filtro de 12,5 kHz; sólo recepción. La ganancia se ajusta sola para que una portadora fuerte no sature. La sensibilidad en la banda aérea es menor que en 136–174 MHz.</p>
+</section>
+
+<section id="acars">
+  <h2>10. ACARS</h2>
+  <p>Mensajes de datos de aviación (2400 bit/s). Canales VHF principales en Europa: 131,525, 131,725 y 131,825 MHz. La pantalla principal muestra los mensajes recibidos, los descartados y un resumen del último.</p>
+  <p><kbd>*</kbd> abre la lista (16 mensajes, el más reciente primero); <kbd>▲</kbd> <kbd>▼</kbd> los recorren; <kbd>*</kbd> o <kbd>ESC</kbd> cierran. Cada mensaje muestra su antigüedad, matrícula y vuelo (<code>All aircraft</code> si es un uplink a todos), si es uplink o downlink, la etiqueta con su nombre, el bloque, <code>fixed</code> si se reparó con el CRC, y el texto.</p>
+  <p>Los <b>squitter</b> de las estaciones de tierra (etiqueta <code>SQ</code>) se muestran descodificados: red (SITA, ARINC), aeropuerto (<code>TFS / GCTS</code>), número de estación, posición, frecuencia y distancia y rumbo desde el QTH.</p>
+</section>
+
+<section id="ais">
+  <h2>11. AIS</h2>
+  <p>Posiciones de barcos. Sintoniza <b>AIS1, 161,975 MHz</b> o <b>AIS2, 162,025 MHz</b> (un canal cada vez). Se guardan hasta 32 estaciones. La pantalla principal muestra los informes recibidos y la última estación: nombre o MMSI, clase, posición, velocidad, rumbo, estado y destino.</p>
+  <p><kbd>*</kbd> abre la página de estaciones (MMSI, indicativo, posición, SOG/COG, estado, tipo, destino, dimensiones y distancia desde el QTH); <kbd>▲</kbd> <kbd>▼</kbd> las recorren y <kbd>ENTER</kbd> las muestra en el <a href="#radar">radar</a>.</p>
+</section>
+
+<section id="radar">
+  <h2>12. Radar (DMR, AIS y mapa TETRA)</h2>
+  <p>Centrado en el QTH propio (el locator configurado al compilar), con el norte arriba y anillos al alcance y a la mitad. Una estación en movimiento es un triángulo que apunta en su rumbo; parada, un rombo; fuera de alcance, una marca en el anillo exterior. La estación elegida con <kbd>▲</kbd> <kbd>▼</kbd> va en amarillo y rodeada, con su nombre, distancia, rumbo y antigüedad a la derecha. <kbd>#</kbd> cambia el alcance: automático (<code>A</code>), luego 2–200 km (DMR, TETRA) o 1–100 NM (AIS). <kbd>ENTER</kbd> vuelve a la estación y <kbd>*</kbd> o <kbd>ESC</kbd> cierran.</p>
+</section>
+
+<section id="espectro">
+  <h2>13. Espectro (<kbd>MONI</kbd> + <kbd>0</kbd> en el VFO)</h2>
+  <p>80 puntos de RSSI alrededor de la frecuencia (1 MHz al principio) con cascada debajo. El modo de operación se suspende mientras está abierto: ni audio ni transmisión.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Tecla</th><th>Acción</th></tr>
+    <tr><td><kbd>▲</kbd> <kbd>▼</kbd></td><td>Mover el marcador un punto</td></tr>
+    <tr><td><kbd>0</kbd></td><td>Marcador al punto más fuerte</td></tr>
+    <tr><td><kbd>*</kbd> / <kbd>#</kbd></td><td>Acercar / alejar alrededor del marcador (100 kHz a 20 MHz)</td></tr>
+    <tr><td><kbd>P1</kbd> / <kbd>P2</kbd></td><td>Tramo siguiente hacia abajo / arriba</td></tr>
+    <tr><td><kbd>5</kbd></td><td>Teclear la frecuencia central; <kbd>ENTER</kbd> barre, <kbd>ESC</kbd> cancela</td></tr>
+    <tr><td><kbd>ENTER</kbd></td><td>Centrar en el marcador</td></tr>
+    <tr><td><kbd>PTT</kbd></td><td>Sintonizar el VFO en el marcador y volver (no transmite)</td></tr>
+    <tr><td><kbd>ESC</kbd></td><td>Volver al VFO sin cambios</td></tr>
+  </table></div>
+</section>
+
+<section id="radiofm">
+  <h2>14. Radio FM (<kbd>MONI</kbd> + <kbd>#</kbd>)</h2>
+  <p>Receptor de radio comercial de 87,5–108 MHz. El modo de la radio se suspende mientras suena. Emisora y volumen se mantienen hasta apagar (100,1 MHz y volumen 10 al principio).</p>
+  <div class="table-wrap"><table>
+    <tr><th>Tecla</th><th>Acción</th></tr>
+    <tr><td><kbd>▲</kbd> <kbd>▼</kbd></td><td>±100 kHz</td></tr>
+    <tr><td><kbd>P1</kbd> / <kbd>P2</kbd></td><td>Buscar emisora hacia abajo / arriba</td></tr>
+    <tr><td><kbd>*</kbd> / <kbd>#</kbd></td><td>Volumen − / + (0–15)</td></tr>
+    <tr><td><kbd>0</kbd>–<kbd>9</kbd></td><td>Teclear en décimas de MHz (<code>1001</code> = 100,1); <kbd>ENTER</kbd> sintoniza</td></tr>
+    <tr><td><kbd>ESC</kbd></td><td>Volver</td></tr>
+  </table></div>
+</section>
+
+<section id="linterna">
+  <h2>15. Linterna</h2>
+  <p><kbd>MONI</kbd> + <kbd>*</kbd> enciende y apaga el LED blanco.</p>
+</section>
+
+<section id="ajustes">
+  <h2>16. Menú Settings (<kbd>ENTER</kbd> &gt; Settings)</h2>
+  <div class="table-wrap"><table>
+    <tr><th>Submenú</th><th>Entradas</th></tr>
+    <tr><td>Display</td><td>Brightness, Timer (apagado de pantalla), Battery Icon, RX Wake (que una señal recibida encienda la pantalla)</td></tr>
+    <tr><td>Radio</td><td>Offset y Direction (desplazamiento de TX), Step (paso de frecuencia)</td></tr>
+    <tr><td>M17</td><td>Callsign, Meta Txt, CAN, CAN RX Check</td></tr>
+    <tr><td>DMR</td><td>Datos de transmisión DMR (sólo si el firmware la lleva; ver <a href="#dmr">DMR</a>)</td></tr>
+    <tr><td>TETRA</td><td>Roaming, AFC, Late calls, Encrypted, Tones (ver <a href="#tetra">TETRA</a>)</td></tr>
+    <tr><td>FM</td><td>CTCSS Tone, CTCSS En.</td></tr>
+    <tr><td>Accessibility</td><td>Macro Latch, Voice (avisos de voz), Phonetic</td></tr>
+    <tr><td>Default Settings</td><td>Volver a los valores de fábrica de ajustes y VFO</td></tr>
+  </table></div>
+  <p>En las listas, <kbd>▲</kbd> <kbd>▼</kbd> eligen, <kbd>ENTER</kbd> edita o cambia el valor y <kbd>ESC</kbd> vuelve.</p>
+</section>
+
+<section id="guardado">
+  <h2>17. Qué se guarda al apagar</h2>
+  <p>Los ajustes y el VFO se guardan 5 s después del último cambio y al apagar con el mando; también sobreviven a quitar la batería.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Se guarda</th><th>No se guarda (vuelve a su valor al encender)</th></tr>
+    <tr><td>Ajustes de Settings, VFO, memorias, ajustes DMR, roaming, AFC y su corrección aprendida</td><td>Grupos TETRA seleccionados y excluidos, Late calls (Off), Encrypted (Mute), Tones (On), emisora de la radio FM, mensajes y estaciones recibidos</td></tr>
+  </table></div>
+</section>
+
+<section id="pc">
+  <h2>18. Editar las memorias en el PC</h2>
+  <p><code>scripts/c62_memories.py</code> lee la tabla de memorias con <code>cskburn</code>, la muestra por páginas como la radio y la vuelve a escribir. Sólo toca la tabla de memorias, nunca la calibración.</p>
+  <pre>python3 OpenRTX/scripts/c62_memories.py</pre>
+  <ol>
+    <li>Elige el puerto y el programa <code>cskburn</code> (se recuerdan).</li>
+    <li>Pon la radio en modo de grabación (ver <a href="#grabar">abajo</a>) y pulsa <b>Read radio</b>.</li>
+    <li>Elige una memoria o un hueco, edítala y pulsa <b>Apply</b>. <b>Copy</b>, <b>Cut</b> y <b>Paste</b> mueven memorias; los botones <b>0</b>–<b>9</b> van a una página.</li>
+    <li>Modo de grabación otra vez y <b>Write radio</b>: escribe y verifica.</li>
+  </ol>
+  <p>Cada lectura se guarda también en <code>~/.local/share/c62-memories/</code>. Los nombres son ASCII y la radio muestra los 16 primeros caracteres.</p>
+</section>
+
+<section id="grabar">
+  <h2>19. Grabar el firmware</h2>
+  <p>Con <a href="https://github.com/LISTENAI/cskburn/releases">cskburn</a> y el cable de programación tipo Kenwood. <b>Modo de grabación:</b> radio apagada, mantener la tecla lateral inferior, encender y soltar; la pantalla queda negra. No pulses el PTT mientras se graba. Hay que entrar en modo de grabación antes de cada orden.</p>
+  <div class="warn"><p>Antes de nada, haz una copia de la flash de tu radio: es única para cada unidad.</p></div>
+  <pre>cskburn -s /dev/ttyUSB0 -C 6 -b 115200 -v --read 0x0:0x400000:backup.bin
+
+cskburn -s /dev/ttyUSB0 -C 6 -b 115200 -v --verify-all \
+    0x100000 dsp_firmware.bin \
+    0x000000 zephyr.bin</pre>
+  <p>Después, apaga y enciende la radio normalmente.</p>
+</section>
+
+<footer>
+  <p>OpenRTX para la Retevis C62, rama <code>c62/dmr</code>. Basado en <code>scripts/c62/README.md</code>, donde está el detalle técnico de cada función.</p>
+</footer>
+</main>
+</div>
+</body>
+</html>
