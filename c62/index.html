@@ -170,6 +170,20 @@
   .mode b { display: block; margin-bottom: 2px; }
   .mode span { color: var(--muted); font-size: 0.9rem; }
 
+  .downloads { display: grid; gap: 10px; margin: 12px 0;
+               grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+  .downloads a {
+    display: block;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    text-decoration: none;
+    background: var(--accent-soft);
+  }
+  .downloads a:hover { border-color: var(--accent); }
+  .downloads b { display: block; font-family: monospace; }
+  .downloads span { color: var(--muted); font-size: 0.9rem; }
+
   footer { color: var(--muted); font-size: 0.85rem; margin-top: 24px; }
 
   @media print {
@@ -207,7 +221,7 @@
     <li><a href="#ajustes">Menú Settings</a></li>
     <li><a href="#guardado">Qué se guarda</a></li>
     <li><a href="#pc">Memorias en el PC</a></li>
-    <li><a href="#grabar">Grabar el firmware</a></li>
+    <li><a href="#grabar">Grabar el firmware</a> (descargas)</li>
   </ol>
 </nav>
 
@@ -480,6 +494,11 @@
   <h2>19. Grabar el firmware</h2>
   <p>Con <a href="https://github.com/LISTENAI/cskburn/releases">cskburn</a> y el cable de programación tipo Kenwood. <b>Modo de grabación:</b> radio apagada, mantener la tecla lateral inferior, encender y soltar; la pantalla queda negra. No pulses el PTT mientras se graba. Hay que entrar en modo de grabación antes de cada orden.</p>
   <div class="warn"><p>Antes de nada, haz una copia de la flash de tu radio: es única para cada unidad.</p></div>
+  <h3>Descargas</h3>
+  <div class="downloads">
+    <a href="zephyr.bin" download><b>⬇ zephyr.bin</b><span>Firmware principal · 0x000000 · 591 KB</span></a>
+    <a href="dsp_firmware.bin" download><b>⬇ dsp_firmware.bin</b><span>Firmware del DSP · 0x100000 · 456 KB</span></a>
+  </div>
   <pre>cskburn -s /dev/ttyUSB0 -C 6 -b 115200 -v --read 0x0:0x400000:backup.bin
 
 cskburn -s /dev/ttyUSB0 -C 6 -b 115200 -v --verify-all \
